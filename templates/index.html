@@ -388,6 +388,13 @@
       return names.join(", ");
     }
 
+    function formatDate(created) {
+      if (created == null || created === "") return currentLang === "de" ? "—" : "—";
+      const d = typeof created === "string" ? new Date(created) : new Date(created);
+      if (isNaN(d.getTime())) return currentLang === "de" ? "—" : "—";
+      return d.toLocaleDateString(currentLang === "de" ? "de-DE" : undefined, { day: "2-digit", month: "2-digit", year: "numeric" });
+    }
+
     function similarityBadgeClass(sim) {
       if (sim >= 100) return "bg-emerald-600 text-white";
       if (sim >= 95) return "bg-amber-500/90 text-slate-900";
@@ -437,9 +444,12 @@
         const corrB = formatCorrespondent(pair.b.correspondent);
         const tagsA = formatTags(pair.a.tags);
         const tagsB = formatTags(pair.b.tags);
+        const dateA = formatDate(pair.a.created);
+        const dateB = formatDate(pair.b.created);
         const titleSame = titleA === titleB;
         const corrSame = corrA === corrB;
         const tagsSame = tagsA === tagsB;
+        const dateSame = dateA === dateB;
         const leftInfo = document.createElement("div");
         leftInfo.innerHTML = `
           <div class="text-xs uppercase tracking-wide text-slate-400">${pair.reason}</div>
@@ -473,17 +483,28 @@
 
         const diffSection = document.createElement("div");
         diffSection.className = "mb-4 p-3 bg-slate-800/50 border border-slate-700 rounded-lg";
+        const labelTitle = currentLang === "de" ? "Titel" : "Title";
+        const labelCorr = currentLang === "de" ? "Korrespondent" : "Correspondent";
+        const labelTags = currentLang === "de" ? "Tags" : "Tags";
+        const labelDate = currentLang === "de" ? "Belegdatum" : "Date";
         diffSection.innerHTML = `
-          <div class="text-xs font-semibold text-slate-400 mb-2">${currentLang === "de" ? "Unterschiede in Paperless (Titel, Korrespondent, Tags)" : "Differences in Paperless (title, correspondent, tags)"}</div>
-          <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+          <div class="text-xs font-semibold text-slate-400 mb-2">${currentLang === "de" ? "Unterschiede in Paperless" : "Differences in Paperless"}</div>
+          <div class="grid grid-cols-[auto_1fr_1fr] gap-x-4 gap-y-1 text-sm items-baseline">
+            <div class="text-slate-500"></div>
             <div class="text-slate-500">${currentLang === "de" ? "Links (ID " : "Left (ID "}${aId})</div>
             <div class="text-slate-500">${currentLang === "de" ? "Rechts (ID " : "Right (ID "}${bId})</div>
+            <div class="text-slate-500">${labelTitle}</div>
             <div class="break-words ${diffClass(titleSame)}">${escapeHtml(titleA || (currentLang === "de" ? "(kein Titel)" : "(no title)"))}</div>
             <div class="break-words ${diffClass(titleSame)}">${escapeHtml(titleB || (currentLang === "de" ? "(kein Titel)" : "(no title)"))}</div>
+            <div class="text-slate-500">${labelCorr}</div>
             <div class="break-words ${diffClass(corrSame)}">${escapeHtml(corrA)}</div>
             <div class="break-words ${diffClass(corrSame)}">${escapeHtml(corrB)}</div>
+            <div class="text-slate-500">${labelTags}</div>
             <div class="break-words ${diffClass(tagsSame)}">${escapeHtml(tagsA)}</div>
             <div class="break-words ${diffClass(tagsSame)}">${escapeHtml(tagsB)}</div>
+            <div class="text-slate-500">${labelDate}</div>
+            <div class="break-words ${diffClass(dateSame)}">${escapeHtml(dateA)}</div>
+            <div class="break-words ${diffClass(dateSame)}">${escapeHtml(dateB)}</div>
           </div>
         `;
         card.appendChild(header);
@@ -496,7 +517,7 @@
         const leftCol = document.createElement("div");
         leftCol.innerHTML = `
           <div class="text-sm font-medium truncate mb-1">${escapeHtml(pair.a.title || (currentLang === "de" ? "(kein Titel)" : "(no title)"))}</div>
-          <div class="text-xs text-slate-400 mb-2">ID ${aId}</div>
+          <div class="text-xs text-slate-400 mb-2">ID ${aId}${dateA !== "—" ? " · " + dateA : ""}</div>
           <div class="bg-slate-950/80 border border-slate-700 rounded-lg overflow-hidden flex items-center justify-center min-h-[14rem]">
             <iframe src="${pair.a.preview_url}" class="w-full h-full min-h-[14rem] scale-75 origin-top" loading="lazy" title="Preview ${aId}"></iframe>
           </div>
@@ -504,7 +525,7 @@
         const rightCol = document.createElement("div");
         rightCol.innerHTML = `
           <div class="text-sm font-medium truncate mb-1">${escapeHtml(pair.b.title || (currentLang === "de" ? "(kein Titel)" : "(no title)"))}</div>
-          <div class="text-xs text-slate-400 mb-2">ID ${bId}</div>
+          <div class="text-xs text-slate-400 mb-2">ID ${bId}${dateB !== "—" ? " · " + dateB : ""}</div>
           <div class="bg-slate-950/80 border border-slate-700 rounded-lg overflow-hidden flex items-center justify-center min-h-[14rem]">
             <iframe src="${pair.b.preview_url}" class="w-full h-full min-h-[14rem] scale-75 origin-top" loading="lazy" title="Preview ${bId}"></iframe>
           </div>

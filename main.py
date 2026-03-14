@@ -100,6 +100,75 @@ async def fetch_all_documents() -> List[Dict[str, Any]]:
     return docs
 
 
+async def _fetch_paginated(client: httpx.AsyncClient, path: str) -> List[Dict[str, Any]]:
+    """Fetch all results from a paginated list endpoint (e.g. /api/correspondents/, /api/tags/)."""
+    out: List[Dict[str, Any]] = []
+    url: str | None = path
+    while url:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+        results = data.get("results", [])
+        out.extend(results)
+        url = data.get("next")
+    return out
+
+
+async def fetch_correspondents_and_tags() -> tuple[Dict[int, Dict[str, Any]], Dict[int, Dict[str, Any]]]:
+    """Returns (correspondents_map: id -> {id, name}, tags_map: id -> {id, name, slug})."""
+    correspondents_map: Dict[int, Dict[str, Any]] = {}
+    tags_map: Dict[int, Dict[str, Any]] = {}
+    async with httpx.AsyncClient(
+        base_url=PAPERLESS_URL,
+        headers=HEADERS,
+        timeout=60.0,
+        follow_redirects=True,
+    ) as client:
+        correspondents = await _fetch_paginated(client, "/api/correspondents/")
+        for c in correspondents:
+            if isinstance(c.get("id"), int):
+                correspondents_map[c["id"]] = {"id": c["id"], "name": c.get("name") or ""}
+        tags = await _fetch_paginated(client, "/api/tags/")
+        for t in tags:
+            if isinstance(t.get("id"), int):
+                tags_map[t["id"]] = {"id": t["id"], "name": t.get("name") or "", "slug": t.get("slug") or ""}
+    log.info("Loaded %s correspondents, %s tags for enrichment", len(correspondents_map), len(tags_map))
+    return correspondents_map, tags_map
+
+
+def _enrich_doc_for_pair(
+    doc: Dict[str, Any],
+    correspondents_map: Dict[int, Dict[str, Any]],
+    tags_map: Dict[int, Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build the document dict for a pair (a/b) with correspondent and tags as objects with names."""
+    c_raw = doc.get("correspondent")
+    if c_raw is None:
+        correspondent = None
+    elif isinstance(c_raw, dict) and c_raw.get("name") is not None:
+        correspondent = {"id": c_raw.get("id"), "name": c_raw.get("name")}
+    elif isinstance(c_raw, int):
+        correspondent = correspondents_map.get(c_raw, {"id": c_raw, "name": None})
+    else:
+        correspondent = None
+
+    tags_raw = doc.get("tags") or []
+    tags_enriched: List[Dict[str, Any]] = []
+    for t in tags_raw:
+        if isinstance(t, dict) and (t.get("name") is not None or t.get("slug") is not None):
+            tags_enriched.append({"id": t.get("id"), "name": t.get("name"), "slug": t.get("slug")})
+        elif isinstance(t, int):
+            tags_enriched.append(tags_map.get(t, {"id": t, "name": None, "slug": None}))
+    return {
+        "id": doc["id"],
+        "title": doc.get("title") or doc.get("original_filename"),
+        "created": doc.get("created"),
+        "correspondent": correspondent,
+        "tags": tags_enriched,
+        "preview_url": build_preview_path(doc["id"]),
+    }
+
+
 def compute_similarity(text_a: str, text_b: str) -> float:
     if not text_a or not text_b:
         return 0.0
@@ -113,6 +182,28 @@ def build_preview_path(doc_id: int) -> str:
     return f"/preview/{doc_id}"
 
 
+def _metadata_penalty(pair: Dict[str, Any]) -> float:
+    """Abzug in Prozentpunkten (0–12), wenn Paperless-Felder (Titel, Korrespondent, Tags, Belegdatum) sich unterscheiden."""
+    a, b = pair["a"], pair["b"]
+    same_title = ((a.get("title") or "").strip() == (b.get("title") or "").strip())
+    c_a = a.get("correspondent") or {}
+    c_b = b.get("correspondent") or {}
+    same_correspondent = (c_a.get("id") == c_b.get("id"))
+    ids_a = {t.get("id") for t in (a.get("tags") or []) if t.get("id") is not None}
+    ids_b = {t.get("id") for t in (b.get("tags") or []) if t.get("id") is not None}
+    same_tags = ids_a == ids_b
+    same_date = (a.get("created") or "") == (b.get("created") or "")
+    same_count = sum([same_title, same_correspondent, same_tags, same_date])
+    return (4 - same_count) * 3.0  # 3 % pro abweichendem Feld, max 12 %
+
+
+def _apply_metadata_to_similarity(pairs: List[Dict[str, Any]]) -> None:
+    """Reduziert pair['similarity'] um Abzug bei abweichenden Paperless-Feldern (in-place)."""
+    for pair in pairs:
+        penalty = _metadata_penalty(pair)
+        pair["similarity"] = max(0.0, pair["similarity"] - penalty)
+
+
 def _yield_line(obj: dict) -> str:
     return json.dumps(obj, ensure_ascii=False) + "\n"
 
@@ -124,6 +215,9 @@ async def stream_duplicates() -> AsyncGenerator[str, None]:
         log.info("Duplicates: fetching documents...")
         docs = await fetch_all_documents()
         yield _yield_line({"event": "progress", "phase": "fetch", "message": f"{len(docs)} Dokumente geladen", "current": len(docs), "total": len(docs)})
+
+        yield _yield_line({"event": "progress", "phase": "fetch", "message": "Lade Korrespondenten und Tags…", "current": 0, "total": None})
+        correspondents_map, tags_map = await fetch_correspondents_and_tags()
 
         yield _yield_line({"event": "progress", "phase": "checksum", "message": "Suche Duplikate nach Checksum…", "current": 0, "total": None})
         by_checksum: Dict[str, List[Dict[str, Any]]] = {}
@@ -142,8 +236,8 @@ async def stream_duplicates() -> AsyncGenerator[str, None]:
                 for j in range(i + 1, n):
                     a, b = group[i], group[j]
                     duplicate_pairs.append({
-                        "a": {"id": a["id"], "title": a.get("title") or a.get("original_filename"), "created": a.get("created"), "correspondent": a.get("correspondent"), "tags": a.get("tags", []), "preview_url": build_preview_path(a["id"])},
-                        "b": {"id": b["id"], "title": b.get("title") or b.get("original_filename"), "created": b.get("created"), "correspondent": b.get("correspondent"), "tags": b.get("tags", []), "preview_url": build_preview_path(b["id"])},
+                        "a": _enrich_doc_for_pair(a, correspondents_map, tags_map),
+                        "b": _enrich_doc_for_pair(b, correspondents_map, tags_map),
                         "similarity": 100.0,
                         "reason": "same_checksum",
                     })
@@ -178,12 +272,13 @@ async def stream_duplicates() -> AsyncGenerator[str, None]:
                     if sim < 80.0:
                         continue
                     duplicate_pairs.append({
-                        "a": {"id": a["id"], "title": a.get("title") or a.get("original_filename"), "created": a.get("created"), "correspondent": a.get("correspondent"), "tags": a.get("tags", []), "preview_url": build_preview_path(a["id"])},
-                        "b": {"id": b["id"], "title": b.get("title") or b.get("original_filename"), "created": b.get("created"), "correspondent": b.get("correspondent"), "tags": b.get("tags", []), "preview_url": build_preview_path(b["id"])},
+                        "a": _enrich_doc_for_pair(a, correspondents_map, tags_map),
+                        "b": _enrich_doc_for_pair(b, correspondents_map, tags_map),
                         "similarity": sim,
                         "reason": "similar_title_and_content",
                     })
 
+        _apply_metadata_to_similarity(duplicate_pairs)
         duplicate_pairs.sort(key=lambda x: x["similarity"], reverse=True)
         similarity_counts: Dict[int, int] = {}
         for pair in duplicate_pairs:
@@ -222,6 +317,9 @@ async def _run_duplicate_job() -> None:
         docs = await fetch_all_documents()
         _set_progress(f"{len(docs)} Dokumente geladen", len(docs), len(docs))
 
+        _set_progress("Lade Korrespondenten und Tags…", 0, None)
+        correspondents_map, tags_map = await fetch_correspondents_and_tags()
+
         _set_progress("Suche Duplikate nach Checksum…", 0, None)
         by_checksum: Dict[str, List[Dict[str, Any]]] = {}
         for d in docs:
@@ -237,8 +335,8 @@ async def _run_duplicate_job() -> None:
                 for j in range(i + 1, n):
                     a, b = group[i], group[j]
                     duplicate_pairs.append({
-                        "a": {"id": a["id"], "title": a.get("title") or a.get("original_filename"), "created": a.get("created"), "correspondent": a.get("correspondent"), "tags": a.get("tags", []), "preview_url": build_preview_path(a["id"])},
-                        "b": {"id": b["id"], "title": b.get("title") or b.get("original_filename"), "created": b.get("created"), "correspondent": b.get("correspondent"), "tags": b.get("tags", []), "preview_url": build_preview_path(b["id"])},
+                        "a": _enrich_doc_for_pair(a, correspondents_map, tags_map),
+                        "b": _enrich_doc_for_pair(b, correspondents_map, tags_map),
                         "similarity": 100.0,
                         "reason": "same_checksum",
                     })
@@ -269,11 +367,12 @@ async def _run_duplicate_job() -> None:
                         _set_progress(f"Verglichen: {done}/{total_compare}", done, total_compare)
                     if sim >= 80.0:
                         duplicate_pairs.append({
-                            "a": {"id": a["id"], "title": a.get("title") or a.get("original_filename"), "created": a.get("created"), "correspondent": a.get("correspondent"), "tags": a.get("tags", []), "preview_url": build_preview_path(a["id"])},
-                            "b": {"id": b["id"], "title": b.get("title") or b.get("original_filename"), "created": b.get("created"), "correspondent": b.get("correspondent"), "tags": b.get("tags", []), "preview_url": build_preview_path(b["id"])},
+                            "a": _enrich_doc_for_pair(a, correspondents_map, tags_map),
+                            "b": _enrich_doc_for_pair(b, correspondents_map, tags_map),
                             "similarity": sim,
                             "reason": "similar_title_and_content",
                         })
+        _apply_metadata_to_similarity(duplicate_pairs)
         duplicate_pairs.sort(key=lambda x: x["similarity"], reverse=True)
         similarity_counts: Dict[int, int] = {}
         for pair in duplicate_pairs:
