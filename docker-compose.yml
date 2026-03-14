@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    container_name: paperless-duplicate-search
+    ports:
+      - "8000:8000"
+    environment:
+      # Passe diese Werte an deine Umgebung an oder nutze eine .env-Datei
+      PAPERLESS_URL: "https://dein-paperless-host"
+      PAPERLESS_TOKEN: "DEIN_API_TOKEN"
+    restart: unless-stopped
+

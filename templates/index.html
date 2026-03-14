@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>Paperless Duplikate</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <div class="max-w-6xl mx-auto py-8 px-4">
+    <header class="mb-8 flex items-center justify-between">
+      <div>
+        <h1 class="text-3xl font-bold tracking-tight">Paperless Duplikate</h1>
+        <p class="text-slate-400 mt-1">Finde und bestätige Duplikate mit Vorschau, bevor du sie löschst.</p>
+      </div>
+      <button id="reloadBtn" class="px-4 py-2 rounded-md bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-semibold">
+        Neu laden
+      </button>
+    </header>
+
+    <div id="status" class="mb-4 text-sm text-slate-300">Lade Duplikate...</div>
+
+    <div id="pairsContainer" class="space-y-6"></div>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const container = document.getElementById("pairsContainer");
+    const reloadBtn = document.getElementById("reloadBtn");
+
+    async function loadPairs() {
+      statusEl.textContent = "Lade Duplikate...";
+      container.innerHTML = "";
+      try {
+        const resp = await fetch("/api/duplicates");
+        if (!resp.ok) {
+          throw new Error("HTTP " + resp.status);
+        }
+        const data = await resp.json();
+        const pairs = data.pairs || [];
+
+        if (pairs.length === 0) {
+          statusEl.textContent = "Keine Duplikate gefunden.";
+          return;
+        }
+
+        statusEl.textContent = pairs.length + " Duplikat-Paar(e) gefunden.";
+
+        for (const pair of pairs) {
+          const card = document.createElement("div");
+          card.className = "bg-slate-900/60 border border-slate-800 rounded-xl p-4 shadow-lg";
+
+          const header = document.createElement("div");
+          header.className = "flex items-center justify-between mb-4";
+
+          const leftInfo = document.createElement("div");
+          leftInfo.innerHTML = `
+            <div class="text-xs uppercase tracking-wide text-slate-400">${pair.reason}</div>
+            <div class="text-lg font-semibold mt-1">
+              Ähnlichkeit: <span class="text-emerald-400">${pair.similarity.toFixed(1)}%</span>
+            </div>
+          `;
+
+          const rightInfo = document.createElement("div");
+          rightInfo.className = "text-right text-xs text-slate-400";
+          rightInfo.textContent = "ID " + pair.a.id + " ↔ ID " + pair.b.id;
+
+          header.appendChild(leftInfo);
+          header.appendChild(rightInfo);
+
+          const previewWrapper = document.createElement("div");
+          previewWrapper.className = "grid grid-cols-1 md:grid-cols-2 gap-4 mb-4";
+
+          const leftCol = document.createElement("div");
+          leftCol.innerHTML = `
+            <div class="text-sm font-medium mb-1">${pair.a.title || "(kein Titel)"}</div>
+            <div class="text-xs text-slate-400 mb-2">ID ${pair.a.id}</div>
+            <div class="aspect-[3/4] bg-slate-950/60 border border-slate-800 rounded-lg overflow-hidden flex items-center justify-center">
+              <iframe src="${pair.a.preview_url}" class="w-full h-full" loading="lazy"></iframe>
+            </div>
+          `;
+
+          const rightCol = document.createElement("div");
+          rightCol.innerHTML = `
+            <div class="text-sm font-medium mb-1">${pair.b.title || "(kein Titel)"}</div>
+            <div class="text-xs text-slate-400 mb-2">ID ${pair.b.id}</div>
+            <div class="aspect-[3/4] bg-slate-950/60 border border-slate-800 rounded-lg overflow-hidden flex items-center justify-center">
+              <iframe src="${pair.b.preview_url}" class="w-full h-full" loading="lazy"></iframe>
+            </div>
+          `;
+
+          previewWrapper.appendChild(leftCol);
+          previewWrapper.appendChild(rightCol);
+
+          const actions = document.createElement("div");
+          actions.className = "flex flex-wrap gap-2 justify-end";
+
+          const keepADeleteB = document.createElement("button");
+          keepADeleteB.className = "px-3 py-2 rounded-md bg-red-500 hover:bg-red-400 text-slate-900 text-sm font-semibold";
+          keepADeleteB.textContent = `Rechtes (ID ${pair.b.id}) löschen`;
+          keepADeleteB.onclick = async () => {
+            if (!confirm(`Dokument ID ${pair.b.id} wirklich löschen (linkes bleibt erhalten)?`)) return;
+            await deleteDoc(pair.a.id, pair.b.id, card);
+          };
+
+          const keepBDeleteA = document.createElement("button");
+          keepBDeleteA.className = "px-3 py-2 rounded-md bg-orange-500 hover:bg-orange-400 text-slate-900 text-sm font-semibold";
+          keepBDeleteA.textContent = `Linkes (ID ${pair.a.id}) löschen`;
+          keepBDeleteA.onclick = async () => {
+            if (!confirm(`Dokument ID ${pair.a.id} wirklich löschen (rechtes bleibt erhalten)?`)) return;
+            await deleteDoc(pair.b.id, pair.a.id, card);
+          };
+
+          const skipBtn = document.createElement("button");
+          skipBtn.className = "px-3 py-2 rounded-md border border-slate-600 text-slate-200 text-sm";
+          skipBtn.textContent = "Paar überspringen";
+          skipBtn.onclick = () => {
+            card.remove();
+          };
+
+          actions.appendChild(keepADeleteB);
+          actions.appendChild(keepBDeleteA);
+          actions.appendChild(skipBtn);
+
+          card.appendChild(header);
+          card.appendChild(previewWrapper);
+          card.appendChild(actions);
+
+          container.appendChild(card);
+        }
+
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "Fehler beim Laden der Duplikate: " + err;
+      }
+    }
+
+    async function deleteDoc(keepId, removeId, cardElement) {
+      try {
+        const resp = await fetch("/api/delete", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ keep_id: keepId, remove_id: removeId }),
+        });
+        if (!resp.ok) {
+          const text = await resp.text();
+          alert("Fehler beim Löschen: " + text);
+          return;
+        }
+        cardElement.remove();
+      } catch (err) {
+        console.error(err);
+        alert("Fehler beim Löschen: " + err);
+      }
+    }
+
+    reloadBtn.addEventListener("click", loadPairs);
+    loadPairs();
+  </script>
+</body>
+</html>
+
