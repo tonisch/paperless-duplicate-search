@@ -48,7 +48,7 @@
         <p id="loadingTitle" class="text-lg font-semibold text-slate-100">Lade Duplikate…</p>
         <div class="w-full">
           <div class="flex items-center justify-between text-sm text-slate-400 mb-1">
-            <span id="loadingPhase">Verbindung wird hergestellt…</span>
+            <span id="loadingPhase">Starte Abfrage…</span>
             <span id="progressPercent">0%</span>
           </div>
           <div class="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
@@ -543,18 +543,21 @@
       const logEl = document.getElementById("loadLog");
       const phaseEl = document.getElementById("loadingPhase");
       if (show) {
-        overlay.classList.remove("hidden");
-        logEl.textContent = "";
-        phaseEl.textContent = currentLang === "de" ? "Verbindung wird hergestellt…" : "Connecting…";
-        document.getElementById("progressBar").style.width = "0%";
-        document.getElementById("progressPercent").textContent = "0%";
+        if (overlay) overlay.classList.remove("hidden");
+        if (logEl) logEl.textContent = "";
+        if (phaseEl) phaseEl.textContent = currentLang === "de" ? "Starte Abfrage…" : "Starting request…";
+        const bar = document.getElementById("progressBar");
+        const pct = document.getElementById("progressPercent");
+        if (bar) bar.style.width = "0%";
+        if (pct) pct.textContent = "0%";
       } else {
-        overlay.classList.add("hidden");
+        if (overlay) overlay.classList.add("hidden");
       }
     }
 
     function appendLog(message) {
       const logEl = document.getElementById("loadLog");
+      if (!logEl) return;
       const line = "[" + new Date().toLocaleTimeString() + "] " + message + "\n";
       logEl.textContent += line;
       logEl.scrollTop = logEl.scrollHeight;
@@ -571,13 +574,15 @@
       } else if (current > 0) {
         pct = 50;
       }
-      bar.style.width = pct + "%";
-      percentEl.textContent = total != null ? pct + "%" : "…";
+      if (bar) bar.style.width = pct + "%";
+      if (percentEl) percentEl.textContent = total != null ? pct + "%" : "…";
       if (message) {
-        phaseEl.textContent = message;
-        const line = "[" + new Date().toLocaleTimeString() + "] " + message + "\n";
-        logEl.textContent += line;
-        logEl.scrollTop = logEl.scrollHeight;
+        if (phaseEl) phaseEl.textContent = message;
+        if (logEl) {
+          const line = "[" + new Date().toLocaleTimeString() + "] " + message + "\n";
+          logEl.textContent += line;
+          logEl.scrollTop = logEl.scrollHeight;
+        }
       }
     }
 
@@ -874,10 +879,15 @@
       renderPairs();
     });
 
-    // Initial language setup
+    // Initial language setup und Laden starten (loadPairs immer ausführen, auch wenn applyTranslations fehlschlägt)
     currentLang = detectLanguage();
-    languageSelect.value = "auto";
-    applyTranslations();
+    try {
+      const langSelect = document.getElementById("languageSelect");
+      if (langSelect) langSelect.value = "auto";
+      applyTranslations();
+    } catch (e) {
+      console.error("applyTranslations:", e);
+    }
     loadPairs();
   </script>
 </body>
