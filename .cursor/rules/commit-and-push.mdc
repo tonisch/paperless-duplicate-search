@@ -1,0 +1,13 @@
+---
+description: Nach Änderungen immer commit und push ausführen
+alwaysApply: true
+---
+
+# Commit und Push nach Änderungen
+
+Nach jeder Änderung am Projekt:
+
+1. **Commit**: Alle geänderten Dateien stagen und mit aussagekräftiger Message committen (z. B. auf Deutsch, wenn der Nutzer auf Deutsch schreibt).
+2. **Push**: Den aktuellen Branch zu `origin` pushen.
+
+So kann der Nutzer den Server direkt aktualisieren. Commit- und Push-Schritte nicht vergessen und nicht nur vorschlagen – tatsächlich ausführen.
