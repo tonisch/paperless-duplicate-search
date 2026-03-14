@@ -57,6 +57,29 @@
       return true;
     }
 
+    function formatCorrespondent(c) {
+      if (!c) return "(kein Korrespondent)";
+      if (typeof c === "string" || typeof c === "number") return "Korrespondent #" + c;
+      if (c.name) return c.name;
+      if (c.id) return "Korrespondent #" + c.id;
+      return "(kein Korrespondent)";
+    }
+
+    function formatTags(tags) {
+      if (!tags || tags.length === 0) return "Keine Tags";
+      const names = tags
+        .map((t) => {
+          if (typeof t === "string" || typeof t === "number") return "#" + t;
+          if (t.name) return t.name;
+          if (t.slug) return t.slug;
+          if (t.id) return "#" + t.id;
+          return "";
+        })
+        .filter(Boolean);
+      if (!names.length) return "Keine Tags";
+      return names.join(", ");
+    }
+
     function renderPairs() {
       container.innerHTML = "";
       const visiblePairs = allPairs.filter(passesFilter);
@@ -69,6 +92,94 @@
       }
 
       for (const pair of visiblePairs) {
+        const card = document.createElement("div");
+        card.className = "bg-slate-900/60 border border-slate-800 rounded-xl p-4 shadow-lg";
+
+        const header = document.createElement("div");
+        header.className = "flex items-center justify-between mb-4";
+
+        const leftInfo = document.createElement("div");
+        leftInfo.innerHTML = `
+          <div class="text-xs uppercase tracking-wide text-slate-400">${pair.reason}</div>
+          <div class="text-lg font-semibold mt-1">
+            Ähnlichkeit: <span class="text-emerald-400">${pair.similarity.toFixed(1)}%</span>
+          </div>
+        `;
+
+        const rightInfo = document.createElement("div");
+        rightInfo.className = "text-right text-xs text-slate-400";
+        rightInfo.textContent = "ID " + pair.a.id + " ↔ ID " + pair.b.id;
+
+        header.appendChild(leftInfo);
+        header.appendChild(rightInfo);
+
+        const previewWrapper = document.createElement("div");
+        previewWrapper.className = "grid grid-cols-1 md:grid-cols-2 gap-4 mb-4";
+
+        const leftCol = document.createElement("div");
+        leftCol.innerHTML = `
+          <div class="text-sm font-medium mb-1">${pair.a.title || "(kein Titel)"}</div>
+          <div class="text-xs text-slate-400 mb-1">ID ${pair.a.id}</div>
+          <div class="text-xs text-slate-400 mb-1">Korrespondent: ${formatCorrespondent(pair.a.correspondent)}</div>
+          <div class="text-xs text-slate-400 mb-2">Tags: ${formatTags(pair.a.tags)}</div>
+          <div class="bg-slate-950/60 border border-slate-800 rounded-lg overflow-hidden flex items-center justify-center h-56">
+            <iframe src="${pair.a.preview_url}" class="w-full h-full scale-75 origin-top" loading="lazy"></iframe>
+          </div>
+        `;
+
+        const rightCol = document.createElement("div");
+        rightCol.innerHTML = `
+          <div class="text-sm font-medium mb-1">${pair.b.title || "(kein Titel)"}</div>
+          <div class="text-xs text-slate-400 mb-1">ID ${pair.b.id}</div>
+          <div class="text-xs text-slate-400 mb-1">Korrespondent: ${formatCorrespondent(pair.b.correspondent)}</div>
+          <div class="text-xs text-slate-400 mb-2">Tags: ${formatTags(pair.b.tags)}</div>
+          <div class="bg-slate-950/60 border border-slate-800 rounded-lg overflow-hidden flex items-center justify-center h-56">
+            <iframe src="${pair.b.preview_url}" class="w-full h-full scale-75 origin-top" loading="lazy"></iframe>
+          </div>
+        `;
+
+        previewWrapper.appendChild(leftCol);
+        previewWrapper.appendChild(rightCol);
+
+        const actions = document.createElement("div");
+        actions.className = "flex flex-wrap gap-2 justify-end";
+
+        const keepADeleteB = document.createElement("button");
+        keepADeleteB.className = "px-3 py-2 rounded-md bg-red-500 hover:bg-red-400 text-slate-900 text-sm font-semibold";
+        keepADeleteB.textContent = `Rechtes (ID ${pair.b.id}) löschen`;
+        keepADeleteB.onclick = async () => {
+          if (!confirm(`Dokument ID ${pair.b.id} wirklich löschen (linkes bleibt erhalten)?`)) return;
+          await deleteDoc(pair.a.id, pair.b.id, card);
+        };
+
+        const keepBDeleteA = document.createElement("button");
+        keepBDeleteA.className = "px-3 py-2 rounded-md bg-orange-500 hover:bg-orange-400 text-slate-900 text-sm font-semibold";
+        keepBDeleteA.textContent = `Linkes (ID ${pair.a.id}) löschen`;
+        keepBDeleteA.onclick = async () => {
+          if (!confirm(`Dokument ID ${pair.a.id} wirklich löschen (rechtes bleibt erhalten)?`)) return;
+          await deleteDoc(pair.b.id, pair.a.id, card);
+        };
+
+        const skipBtn = document.createElement("button");
+        skipBtn.className = "px-3 py-2 rounded-md border border-slate-600 text-slate-200 text-sm";
+        skipBtn.textContent = "Paar überspringen";
+        skipBtn.onclick = () => {
+          card.remove();
+        };
+
+        actions.appendChild(keepADeleteB);
+        actions.appendChild(keepBDeleteA);
+        actions.appendChild(skipBtn);
+
+        card.appendChild(header);
+        card.appendChild(previewWrapper);
+        card.appendChild(actions);
+
+        container.appendChild(card);
+      }
+    }
+
+    async function loadPairs() {
       statusEl.textContent = "Lade Duplikate...";
       container.innerHTML = "";
       try {
@@ -81,6 +192,8 @@
 
         if (pairs.length === 0) {
           statusEl.textContent = "Keine Duplikate gefunden.";
+          allPairs = [];
+          renderPairs();
           return;
         }
 
@@ -91,7 +204,6 @@
 
         allPairs = pairs;
         renderPairs();
-
       } catch (err) {
         console.error(err);
         statusEl.textContent = "Fehler beim Laden der Duplikate: " + err;
@@ -153,144 +265,3 @@
   </script>
 </body>
 </html>
-
-          const card = document.createElement("div");
-          card.className = "bg-slate-900/60 border border-slate-800 rounded-xl p-4 shadow-lg";
-
-          const header = document.createElement("div");
-          header.className = "flex items-center justify-between mb-4";
-
-          const leftInfo = document.createElement("div");
-          leftInfo.innerHTML = `
-            <div class="text-xs uppercase tracking-wide text-slate-400">${pair.reason}</div>
-            <div class="text-lg font-semibold mt-1">
-              Ähnlichkeit: <span class="text-emerald-400">${pair.similarity.toFixed(1)}%</span>
-            </div>
-          `;
-
-          const rightInfo = document.createElement("div");
-          rightInfo.className = "text-right text-xs text-slate-400";
-          rightInfo.textContent = "ID " + pair.a.id + " ↔ ID " + pair.b.id;
-
-          header.appendChild(leftInfo);
-          header.appendChild(rightInfo);
-
-          const previewWrapper = document.createElement("div");
-          previewWrapper.className = "grid grid-cols-1 md:grid-cols-2 gap-4 mb-4";
-
-          function formatCorrespondent(c) {
-            if (!c) return "(kein Korrespondent)";
-            if (typeof c === "string" || typeof c === "number") return "Korrespondent #" + c;
-            if (c.name) return c.name;
-            if (c.id) return "Korrespondent #" + c.id;
-            return "(kein Korrespondent)";
-          }
-
-          function formatTags(tags) {
-            if (!tags || tags.length === 0) return "Keine Tags";
-            const names = tags.map((t) => {
-              if (typeof t === "string" || typeof t === "number") return "#" + t;
-              if (t.name) return t.name;
-              if (t.slug) return t.slug;
-              if (t.id) return "#" + t.id;
-              return "";
-            }).filter(Boolean);
-            if (!names.length) return "Keine Tags";
-            return names.join(", ");
-          }
-
-          const leftCol = document.createElement("div");
-          leftCol.innerHTML = `
-            <div class="text-sm font-medium mb-1">${pair.a.title || "(kein Titel)"}</div>
-            <div class="text-xs text-slate-400 mb-1">ID ${pair.a.id}</div>
-            <div class="text-xs text-slate-400 mb-1">Korrespondent: ${formatCorrespondent(pair.a.correspondent)}</div>
-            <div class="text-xs text-slate-400 mb-2">Tags: ${formatTags(pair.a.tags)}</div>
-            <div class="bg-slate-950/60 border border-slate-800 rounded-lg overflow-hidden flex items-center justify-center h-56">
-              <iframe src="${pair.a.preview_url}" class="w-full h-full scale-75 origin-top" loading="lazy"></iframe>
-            </div>
-          `;
-
-          const rightCol = document.createElement("div");
-          rightCol.innerHTML = `
-            <div class="text-sm font-medium mb-1">${pair.b.title || "(kein Titel)"}</div>
-            <div class="text-xs text-slate-400 mb-1">ID ${pair.b.id}</div>
-            <div class="text-xs text-slate-400 mb-1">Korrespondent: ${formatCorrespondent(pair.b.correspondent)}</div>
-            <div class="text-xs text-slate-400 mb-2">Tags: ${formatTags(pair.b.tags)}</div>
-            <div class="bg-slate-950/60 border border-slate-800 rounded-lg overflow-hidden flex items-center justify-center h-56">
-              <iframe src="${pair.b.preview_url}" class="w-full h-full scale-75 origin-top" loading="lazy"></iframe>
-            </div>
-          `;
-
-          previewWrapper.appendChild(leftCol);
-          previewWrapper.appendChild(rightCol);
-
-          const actions = document.createElement("div");
-          actions.className = "flex flex-wrap gap-2 justify-end";
-
-          const keepADeleteB = document.createElement("button");
-          keepADeleteB.className = "px-3 py-2 rounded-md bg-red-500 hover:bg-red-400 text-slate-900 text-sm font-semibold";
-          keepADeleteB.textContent = `Rechtes (ID ${pair.b.id}) löschen`;
-          keepADeleteB.onclick = async () => {
-            if (!confirm(`Dokument ID ${pair.b.id} wirklich löschen (linkes bleibt erhalten)?`)) return;
-            await deleteDoc(pair.a.id, pair.b.id, card);
-          };
-
-          const keepBDeleteA = document.createElement("button");
-          keepBDeleteA.className = "px-3 py-2 rounded-md bg-orange-500 hover:bg-orange-400 text-slate-900 text-sm font-semibold";
-          keepBDeleteA.textContent = `Linkes (ID ${pair.a.id}) löschen`;
-          keepBDeleteA.onclick = async () => {
-            if (!confirm(`Dokument ID ${pair.a.id} wirklich löschen (rechtes bleibt erhalten)?`)) return;
-            await deleteDoc(pair.b.id, pair.a.id, card);
-          };
-
-          const skipBtn = document.createElement("button");
-          skipBtn.className = "px-3 py-2 rounded-md border border-slate-600 text-slate-200 text-sm";
-          skipBtn.textContent = "Paar überspringen";
-          skipBtn.onclick = () => {
-            card.remove();
-          };
-
-          actions.appendChild(keepADeleteB);
-          actions.appendChild(keepBDeleteA);
-          actions.appendChild(skipBtn);
-
-          card.appendChild(header);
-          card.appendChild(previewWrapper);
-          card.appendChild(actions);
-
-          container.appendChild(card);
-        }
-
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent = "Fehler beim Laden der Duplikate: " + err;
-      }
-    }
-
-    async function deleteDoc(keepId, removeId, cardElement) {
-      try {
-        const resp = await fetch("/api/delete", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ keep_id: keepId, remove_id: removeId }),
-        });
-        if (!resp.ok) {
-          const text = await resp.text();
-          alert("Fehler beim Löschen: " + text);
-          return;
-        }
-        cardElement.remove();
-      } catch (err) {
-        console.error(err);
-        alert("Fehler beim Löschen: " + err);
-      }
-    }
-
-    reloadBtn.addEventListener("click", loadPairs);
-    loadPairs();
-  </script>
-</body>
-</html>
-
