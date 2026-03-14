@@ -53,10 +53,15 @@
     </div>
 
     <section class="mb-6">
-      <h2 id="statsTitle" class="text-sm font-semibold text-slate-200 mb-2">Statistik</h2>
-      <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-3">
-        <canvas id="similarityChart" class="w-full h-40"></canvas>
-      </div>
+      <details id="statsSection" class="group" open>
+        <summary class="cursor-pointer list-none flex items-center gap-2 text-sm font-semibold text-slate-200 mb-2 select-none hover:text-slate-100">
+          <span id="statsTitle">Statistik</span>
+          <span class="text-slate-500 text-xs transition-transform inline-block group-open:rotate-90">▶</span>
+        </summary>
+        <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-3">
+          <canvas id="similarityChart" class="w-full h-40"></canvas>
+        </div>
+      </details>
     </section>
 
     <div id="pairsContainer" class="space-y-4"></div>
@@ -73,7 +78,10 @@
         filter_100: "Nur 100%",
         filter_ge95: "≥ 95%",
         filter_ge90: "≥ 90%",
-        selectAllVisible: "Alle sichtbaren auswählen",
+        selectAllVisible: "Alle sichtbaren Paare auswählen",
+        pairSelectLabel: "Paar zum Bereinigen auswählen",
+        keepLeft: "Linkes behalten",
+        keepRight: "Rechtes behalten",
         deleteSelected: "Ausgewählte löschen",
         deleteAllPerfect: "Alle 100%-Duplikate bereinigen",
         statsTitle: "Statistik",
@@ -112,7 +120,10 @@
         filter_100: "Only 100%",
         filter_ge95: "≥ 95%",
         filter_ge90: "≥ 90%",
-        selectAllVisible: "Select all visible",
+        selectAllVisible: "Select all visible pairs",
+        pairSelectLabel: "Select pair for cleanup",
+        keepLeft: "Keep left",
+        keepRight: "Keep right",
         deleteSelected: "Delete selected",
         deleteAllPerfect: "Clean up all 100% duplicates",
         statsTitle: "Statistics",
@@ -160,7 +171,8 @@
       document.getElementById("title").textContent = t.title;
       document.getElementById("subtitle").textContent = t.subtitle;
       document.getElementById("filterLabel").textContent = t.filterLabel;
-      document.getElementById("statsTitle").textContent = t.statsTitle;
+      const statsTitleEl = document.getElementById("statsTitle");
+      if (statsTitleEl) statsTitleEl.textContent = t.statsTitle;
       document.getElementById("selectAllVisibleLabel").textContent =
         t.selectAllVisible;
       document.getElementById("reloadBtn").textContent =
@@ -205,7 +217,8 @@
     const languageSelect = document.getElementById("languageSelect");
 
     let allPairs = [];
-    let selectedDocIds = new Set();
+    /** @type {Map<string, 'deleteA'|'deleteB'>} Paar-Key -> welches Dokument löschen */
+    let selectedPairs = new Map();
     let similarityChart = null;
 
     function t() {
@@ -265,8 +278,9 @@
         const card = document.createElement("div");
         card.className = "bg-slate-900/60 border border-slate-800 rounded-xl p-4 shadow-lg";
 
+        const pairKey = `${aId}-${bId}`;
         const header = document.createElement("div");
-        header.className = "flex items-center justify-between mb-4 gap-2";
+        header.className = "flex flex-wrap items-center justify-between mb-4 gap-2";
 
         const leftInfo = document.createElement("div");
         leftInfo.innerHTML = `
@@ -279,8 +293,23 @@
 
         const rightInfo = document.createElement("div");
         rightInfo.className = "flex items-center gap-3 text-xs text-slate-400";
-        rightInfo.textContent =
-          (currentLang === "de" ? "ID " : "ID ") + aId + " ↔ ID " + bId;
+        rightInfo.innerHTML = `
+          <span>${currentLang === "de" ? "ID " : "ID "}${aId} ↔ ID ${bId}</span>
+          <label class="flex items-center gap-1.5 whitespace-nowrap">
+            <input type="checkbox" class="pair-checkbox" data-pair-key="${pairKey}" />
+            <span>${t().pairSelectLabel}</span>
+          </label>
+          <span class="text-slate-500">|</span>
+          <span class="text-slate-500">${currentLang === "de" ? "Behalten:" : "Keep:"}</span>
+          <label class="flex items-center gap-1">
+            <input type="radio" name="keep-${pairKey}" class="pair-keep-radio" value="keepA" data-pair-key="${pairKey}" />
+            <span>${t().keepLeft}</span>
+          </label>
+          <label class="flex items-center gap-1">
+            <input type="radio" name="keep-${pairKey}" class="pair-keep-radio" value="keepB" data-pair-key="${pairKey}" />
+            <span>${t().keepRight}</span>
+          </label>
+        `;
 
         header.appendChild(leftInfo);
         header.appendChild(rightInfo);
@@ -292,10 +321,6 @@
         leftCol.innerHTML = `
           <div class="flex items-center justify-between gap-2 mb-1">
             <div class="text-sm font-medium truncate">${pair.a.title || (currentLang === "de" ? "(kein Titel)" : "(no title)")}</div>
-            <label class="flex items-center gap-1 text-xs text-slate-400 whitespace-nowrap">
-              <input type="checkbox" class="doc-checkbox" data-doc-id="${aId}" />
-              <span>${t().chooseLabel}</span>
-            </label>
           </div>
           <div class="text-xs text-slate-400 mb-1">ID ${aId}</div>
           <div class="text-xs text-slate-400 mb-1">${currentLang === "de" ? "Korrespondent" : "Correspondent"}: ${formatCorrespondent(pair.a.correspondent)}</div>
@@ -309,10 +334,6 @@
         rightCol.innerHTML = `
           <div class="flex items-center justify-between gap-2 mb-1">
             <div class="text-sm font-medium truncate">${pair.b.title || (currentLang === "de" ? "(kein Titel)" : "(no title)")}</div>
-            <label class="flex items-center gap-1 text-xs text-slate-400 whitespace-nowrap">
-              <input type="checkbox" class="doc-checkbox" data-doc-id="${bId}" />
-              <span>${t().chooseLabel}</span>
-            </label>
           </div>
           <div class="text-xs text-slate-400 mb-1">ID ${bId}</div>
           <div class="text-xs text-slate-400 mb-1">${currentLang === "de" ? "Korrespondent" : "Correspondent"}: ${formatCorrespondent(pair.b.correspondent)}</div>
@@ -371,22 +392,40 @@
 
         container.appendChild(card);
 
-        // Checkbox-Status setzen und Listener
-        card.querySelectorAll(".doc-checkbox").forEach((cb) => {
-          const id = parseInt(cb.getAttribute("data-doc-id"), 10);
-          if (selectedDocIds.has(id)) {
-            cb.checked = true;
+        // Paar-Checkbox und Radios: Status setzen und Listener
+        const pairCb = card.querySelector(".pair-checkbox");
+        const keepRadios = card.querySelectorAll(".pair-keep-radio");
+        const currentAction = selectedPairs.get(pairKey);
+        if (currentAction) {
+          pairCb.checked = true;
+          card.querySelector(`input[name="keep-${pairKey}"][value="${currentAction === "deleteB" ? "keepA" : "keepB"}"]`).checked = true;
+        } else {
+          const defaultKeep = "keepA";
+          card.querySelector(`input[name="keep-${pairKey}"][value="${defaultKeep}"]`).checked = true;
+        }
+        pairCb.addEventListener("change", (e) => {
+          if (e.target.checked) {
+            const keep = card.querySelector(`input[name="keep-${pairKey}"]:checked`)?.value || "keepA";
+            selectedPairs.set(pairKey, keep === "keepA" ? "deleteB" : "deleteA");
+          } else {
+            selectedPairs.delete(pairKey);
+            selectAllVisibleCheckbox.checked = false;
           }
-          cb.addEventListener("change", (e) => {
-            if (e.target.checked) {
-              selectedDocIds.add(id);
-            } else {
-              selectedDocIds.delete(id);
-              selectAllVisibleCheckbox.checked = false;
+        });
+        keepRadios.forEach((radio) => {
+          radio.addEventListener("change", () => {
+            if (pairCb.checked) {
+              const keep = radio.value;
+              selectedPairs.set(pairKey, keep === "keepA" ? "deleteB" : "deleteA");
             }
           });
         });
       }
+
+      const visiblePairs = allPairs.filter(passesFilter);
+      selectAllVisibleCheckbox.checked =
+        visiblePairs.length > 0 &&
+        visiblePairs.every((p) => selectedPairs.has(`${p.a.id}-${p.b.id}`));
     }
 
     function updateChart(similarityCounts) {
@@ -479,8 +518,8 @@
           alert(`${t().errorDelete}: ${text}`);
           return;
         }
-        const idsToRemove = [keepId, removeId];
-        idsToRemove.forEach((id) => selectedDocIds.delete(id));
+        selectedPairs.delete(`${keepId}-${removeId}`);
+        selectedPairs.delete(`${removeId}-${keepId}`);
         cardElement.remove();
       } catch (err) {
         console.error(err);
@@ -489,12 +528,16 @@
     }
 
     async function deleteSelected() {
-      const ids = Array.from(selectedDocIds);
-      if (!ids.length) {
+      const removeIds = [];
+      for (const [pairKey, action] of selectedPairs) {
+        const [aId, bId] = pairKey.split("-").map(Number);
+        removeIds.push(action === "deleteA" ? aId : bId);
+      }
+      if (!removeIds.length) {
         alert(t().noSelection);
         return;
       }
-      if (!confirm(t().confirmDeleteSelected(ids.length))) {
+      if (!confirm(t().confirmDeleteSelected(removeIds.length))) {
         return;
       }
       try {
@@ -504,7 +547,7 @@
         const resp = await fetch("/api/bulk-delete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ids }),
+          body: JSON.stringify({ ids: removeIds }),
         });
         if (!resp.ok) {
           const text = await resp.text();
@@ -512,8 +555,16 @@
           return;
         }
         const data = await resp.json();
-        const deleted = data.deleted_ids || ids;
-        deleted.forEach((id) => selectedDocIds.delete(id));
+        const deleted = data.deleted_ids || removeIds;
+        deleted.forEach((id) => {
+          for (const [pairKey, action] of selectedPairs.entries()) {
+            const [aId, bId] = pairKey.split("-").map(Number);
+            if ((action === "deleteA" && aId === id) || (action === "deleteB" && bId === id)) {
+              selectedPairs.delete(pairKey);
+              break;
+            }
+          }
+        });
         await loadPairs();
       } catch (err) {
         console.error(err);
@@ -601,15 +652,17 @@
     selectAllVisibleCheckbox.addEventListener("change", (e) => {
       const visiblePairs = allPairs.filter(passesFilter);
       const shouldSelect = e.target.checked;
-      container.querySelectorAll(".doc-checkbox").forEach((cb) => {
-        const id = parseInt(cb.getAttribute("data-doc-id"), 10);
-        cb.checked = shouldSelect;
-        if (shouldSelect) {
-          selectedDocIds.add(id);
-        } else {
-          selectedDocIds.delete(id);
-        }
-      });
+      if (shouldSelect) {
+        visiblePairs.forEach((pair) => {
+          const key = `${pair.a.id}-${pair.b.id}`;
+          selectedPairs.set(key, "deleteB");
+        });
+      } else {
+        visiblePairs.forEach((pair) => {
+          selectedPairs.delete(`${pair.a.id}-${pair.b.id}`);
+        });
+      }
+      renderPairs();
     });
 
     languageSelect.addEventListener("change", () => {
