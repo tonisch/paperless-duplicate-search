@@ -553,6 +553,13 @@
       }
     }
 
+    function appendLog(message) {
+      const logEl = document.getElementById("loadLog");
+      const line = "[" + new Date().toLocaleTimeString() + "] " + message + "\n";
+      logEl.textContent += line;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
     function updateProgress(current, total, message) {
       const bar = document.getElementById("progressBar");
       const percentEl = document.getElementById("progressPercent");
@@ -589,88 +596,184 @@
       container.innerHTML = "";
       showProgress(true);
       const logEl = document.getElementById("loadLog");
-      logEl.textContent = "[" + new Date().toLocaleTimeString() + "] " + (currentLang === "de" ? "Starte Abfrage…" : "Starting request…") + "\n";
+      logEl.textContent = "";
+      appendLog(currentLang === "de" ? "Starte Abfrage…" : "Starting request…");
 
       try {
-        const resp = await fetch("/api/duplicates");
-        if (!resp.ok) {
-          throw new Error("HTTP " + resp.status);
+        const pingController = new AbortController();
+        const pingTimeout = setTimeout(() => pingController.abort(), 5000);
+        const pingResp = await fetch("/api/ping", { signal: pingController.signal }).catch(() => null);
+        clearTimeout(pingTimeout);
+        if (pingResp && pingResp.ok) {
+          appendLog(currentLang === "de" ? "Server erreichbar." : "Server reachable.");
+        } else {
+          appendLog(currentLang === "de" ? "Server nicht erreichbar oder Timeout – prüfe URL und Netzwerk." : "Server unreachable or timeout – check URL and network.");
         }
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
+        appendLog(currentLang === "de" ? "Rufe Duplikat-Suche auf…" : "Calling duplicate search…");
+
+        const streamTimeoutMs = 8000;
+        let streamAborted = false;
+        const ac = new AbortController();
+        const timeoutId = setTimeout(() => {
+          if (!streamAborted) {
+            streamAborted = true;
+            ac.abort();
+          }
+        }, streamTimeoutMs);
+
         let resultData = null;
         let errorMessage = null;
+        let gotAnyProgress = false;
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-            try {
-              const obj = JSON.parse(trimmed);
-              if (obj.event === "progress") {
-                updateProgress(obj.current ?? 0, obj.total ?? null, obj.message ?? "");
-              } else if (obj.event === "result") {
-                resultData = obj.data;
-              } else if (obj.event === "error") {
-                errorMessage = obj.message || "Unbekannter Fehler";
+        try {
+          const resp = await fetch("/api/duplicates", { signal: ac.signal });
+          clearTimeout(timeoutId);
+          if (!resp.ok) {
+            throw new Error("HTTP " + resp.status);
+          }
+          const reader = resp.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed) continue;
+              try {
+                const obj = JSON.parse(trimmed);
+                if (obj.event === "progress") {
+                  gotAnyProgress = true;
+                  updateProgress(obj.current ?? 0, obj.total ?? null, obj.message ?? "");
+                } else if (obj.event === "result") {
+                  resultData = obj.data;
+                } else if (obj.event === "error") {
+                  errorMessage = obj.message || (currentLang === "de" ? "Unbekannter Fehler" : "Unknown error");
+                }
+              } catch (e) {
+                console.warn("Parse line:", trimmed, e);
               }
-            } catch (e) {
-              console.warn("Parse line:", trimmed, e);
             }
           }
-        }
-        if (buffer.trim()) {
-          try {
-            const obj = JSON.parse(buffer.trim());
-            if (obj.event === "result") resultData = obj.data;
-            else if (obj.event === "error") errorMessage = obj.message;
-          } catch (_) {}
+          if (buffer.trim()) {
+            try {
+              const obj = JSON.parse(buffer.trim());
+              if (obj.event === "result") resultData = obj.data;
+              else if (obj.event === "error") errorMessage = obj.message;
+            } catch (_) {}
+          }
+        } catch (streamErr) {
+          clearTimeout(timeoutId);
+          if (streamErr.name === "AbortError" && !gotAnyProgress) {
+            appendLog(currentLang === "de" ? "Keine Streaming-Antwort in 8s – wechsle zu Polling (funktioniert hinter Proxy)." : "No stream response in 8s – switching to polling (works behind proxy).");
+            await loadPairsViaPolling();
+            return;
+          }
+          if (!resultData && !errorMessage) throw streamErr;
         }
 
-        if (!errorMessage && resultData) {
-          updateProgress(1, 1, currentLang === "de" ? "Fertig." : "Done.");
-        }
-        showProgress(false);
         if (errorMessage) {
+          showProgress(false);
           statusEl.textContent = t().errorLoadDuplicates + ": " + errorMessage;
-          logEl.textContent += "[" + new Date().toLocaleTimeString() + "] FEHLER: " + errorMessage + "\n";
+          appendLog("FEHLER: " + errorMessage);
           showToast(t().errorLoadDuplicates + ": " + errorMessage, "error");
           return;
         }
-        if (!resultData) {
-          statusEl.textContent = t().errorLoadDuplicates + " (keine Daten)";
-          showToast(t().errorLoadDuplicates + " (keine Daten)", "error");
-          return;
-        }
-
-        const pairs = resultData.pairs || [];
-        if (pairs.length === 0) {
-          statusEl.textContent = t().noneFound;
-          allPairs = [];
-          updateChart({});
+        if (resultData) {
+          if (!resultData.pairs || resultData.pairs.length === 0) {
+            showProgress(false);
+            statusEl.textContent = t().noneFound;
+            allPairs = [];
+            updateChart({});
+            renderPairs();
+            return;
+          }
+          updateProgress(1, 1, currentLang === "de" ? "Fertig." : "Done.");
+          showProgress(false);
+          const total = resultData.total_pairs ?? resultData.pairs.length;
+          const counts = resultData.similarity_counts || {};
+          const count100 = counts["100"] || counts[100] || 0;
+          statusEl.textContent = t().statusSummary(total, count100);
+          allPairs = resultData.pairs;
+          updateChart(counts);
           renderPairs();
           return;
         }
 
-        const total = resultData.total_pairs ?? pairs.length;
-        const counts = resultData.similarity_counts || {};
-        const count100 = counts["100"] || counts[100] || 0;
-        statusEl.textContent = t().statusSummary(total, count100);
-
-        allPairs = pairs;
-        updateChart(counts);
-        renderPairs();
+        showProgress(false);
+        statusEl.textContent = t().errorLoadDuplicates + " (keine Daten)";
+        showToast(t().errorLoadDuplicates + " (keine Daten)", "error");
       } catch (err) {
         console.error(err);
         showProgress(false);
         statusEl.textContent = `${t().errorLoadDuplicates}: ${err.message || err}`;
-        logEl.textContent += "[" + new Date().toLocaleTimeString() + "] " + (currentLang === "de" ? "Fehler:" : "Error:") + " " + (err.message || err) + "\n";
+        appendLog((currentLang === "de" ? "Fehler: " : "Error: ") + (err.message || err));
+        showToast(`${t().errorLoadDuplicates}: ${err.message || err}`, "error");
+      }
+    }
+
+    async function loadPairsViaPolling() {
+      try {
+        const startResp = await fetch("/api/duplicates/start", { method: "POST" });
+        if (!startResp.ok) {
+          if (startResp.status === 409) {
+            appendLog(currentLang === "de" ? "Job läuft bereits, warte auf Status…" : "Job already running, waiting for status…");
+          } else {
+            throw new Error("HTTP " + startResp.status);
+          }
+        } else {
+          appendLog(currentLang === "de" ? "Polling gestartet." : "Polling started.");
+        }
+        const poll = () =>
+          fetch("/api/duplicates/status")
+            .then((r) => r.json())
+            .then((s) => {
+              const p = s.progress || {};
+              updateProgress(p.current ?? 0, p.total ?? null, p.message ?? "");
+              if (s.status === "done" && s.result) {
+                const resultData = s.result;
+                updateProgress(1, 1, currentLang === "de" ? "Fertig." : "Done.");
+                showProgress(false);
+                if (resultData.pairs && resultData.pairs.length > 0) {
+                  const total = resultData.total_pairs ?? resultData.pairs.length;
+                  const counts = resultData.similarity_counts || {};
+                  const count100 = counts["100"] || counts[100] || 0;
+                  statusEl.textContent = t().statusSummary(total, count100);
+                  allPairs = resultData.pairs;
+                  updateChart(counts);
+                  renderPairs();
+                } else {
+                  statusEl.textContent = t().noneFound;
+                  allPairs = [];
+                  updateChart({});
+                  renderPairs();
+                }
+                return true;
+              }
+              if (s.status === "error") {
+                showProgress(false);
+                statusEl.textContent = t().errorLoadDuplicates + ": " + (s.error || "");
+                appendLog("FEHLER: " + (s.error || ""));
+                showToast(t().errorLoadDuplicates + ": " + (s.error || ""), "error");
+                return true;
+              }
+              return false;
+            });
+        const pollInterval = 1000;
+        const done = await new Promise((resolve, reject) => {
+          const run = () => {
+            poll().then((finished) => (finished ? resolve() : setTimeout(run, pollInterval))).catch(reject);
+          };
+          run();
+        });
+      } catch (err) {
+        console.error(err);
+        showProgress(false);
+        statusEl.textContent = `${t().errorLoadDuplicates}: ${err.message || err}`;
+        appendLog((currentLang === "de" ? "Fehler: " : "Error: ") + (err.message || err));
         showToast(`${t().errorLoadDuplicates}: ${err.message || err}`, "error");
       }
     }

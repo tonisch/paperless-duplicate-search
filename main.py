@@ -35,10 +35,24 @@ bulk_delete_state: Dict[str, Any] = {
     "deleted_count": 0,
 }
 
+# Für Polling-Fallback (wenn Streaming gepuffert wird)
+duplicate_job_state: Dict[str, Any] = {
+    "status": "idle",  # idle | running | done | error
+    "progress": {"message": "", "current": 0, "total": None},
+    "result": None,
+    "error": None,
+}
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.get("/api/ping")
+async def ping():
+    """Sofortige Antwort – zum Prüfen der Server-Erreichbarkeit."""
+    return {"ok": True}
 
 
 async def fetch_all_documents() -> List[Dict[str, Any]]:
@@ -170,6 +184,108 @@ async def get_duplicates():
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _set_progress(message: str, current: int, total: int | None) -> None:
+    duplicate_job_state["progress"] = {"message": message, "current": current, "total": total}
+
+
+async def _run_duplicate_job() -> None:
+    """Läuft im Hintergrund; schreibt Fortschritt in duplicate_job_state."""
+    duplicate_job_state["status"] = "running"
+    duplicate_job_state["result"] = None
+    duplicate_job_state["error"] = None
+    try:
+        _set_progress("Lade Dokumente von Paperless…", 0, None)
+        log.info("Duplicates (job): fetching documents...")
+        docs = await fetch_all_documents()
+        _set_progress(f"{len(docs)} Dokumente geladen", len(docs), len(docs))
+
+        _set_progress("Suche Duplikate nach Checksum…", 0, None)
+        by_checksum: Dict[str, List[Dict[str, Any]]] = {}
+        for d in docs:
+            c = d.get("checksum") or ""
+            if c:
+                by_checksum.setdefault(c, []).append(d)
+        duplicate_pairs: List[Dict[str, Any]] = []
+        for checksum, group in by_checksum.items():
+            if len(group) < 2:
+                continue
+            n = len(group)
+            for i in range(n):
+                for j in range(i + 1, n):
+                    a, b = group[i], group[j]
+                    duplicate_pairs.append({
+                        "a": {"id": a["id"], "title": a.get("title") or a.get("original_filename"), "created": a.get("created"), "correspondent": a.get("correspondent"), "tags": a.get("tags", []), "preview_url": build_preview_path(a["id"])},
+                        "b": {"id": b["id"], "title": b.get("title") or b.get("original_filename"), "created": b.get("created"), "correspondent": b.get("correspondent"), "tags": b.get("tags", []), "preview_url": build_preview_path(b["id"])},
+                        "similarity": 100.0,
+                        "reason": "same_checksum",
+                    })
+        _set_progress(f"{len(duplicate_pairs)} 100%-Duplikate (Checksum)", len(duplicate_pairs), None)
+
+        _set_progress("Gruppiere nach Titel…", 0, None)
+        by_title: Dict[str, List[Dict[str, Any]]] = {}
+        for d in docs:
+            title = (d.get("title") or d.get("original_filename") or "").strip().lower()
+            if len(title) >= 5:
+                by_title.setdefault(title, []).append(d)
+        title_groups = [(t, g) for t, g in by_title.items() if len(g) >= 2]
+        total_compare = sum(len(g) * (len(g) - 1) // 2 for _, g in title_groups)
+        _set_progress(f"Vergleiche Inhalt von {total_compare} Kandidaten-Paaren…", 0, total_compare)
+
+        done = 0
+        for title, group in title_groups:
+            n = len(group)
+            for i in range(n):
+                for j in range(i + 1, n):
+                    a, b = group[i], group[j]
+                    if a.get("checksum") and b.get("checksum") and a["checksum"] == b["checksum"]:
+                        done += 1
+                        continue
+                    sim = compute_similarity(a.get("content", ""), b.get("content", ""))
+                    done += 1
+                    if done % 50 == 0 or done == total_compare:
+                        _set_progress(f"Verglichen: {done}/{total_compare}", done, total_compare)
+                    if sim >= 80.0:
+                        duplicate_pairs.append({
+                            "a": {"id": a["id"], "title": a.get("title") or a.get("original_filename"), "created": a.get("created"), "correspondent": a.get("correspondent"), "tags": a.get("tags", []), "preview_url": build_preview_path(a["id"])},
+                            "b": {"id": b["id"], "title": b.get("title") or b.get("original_filename"), "created": b.get("created"), "correspondent": b.get("correspondent"), "tags": b.get("tags", []), "preview_url": build_preview_path(b["id"])},
+                            "similarity": sim,
+                            "reason": "similar_title_and_content",
+                        })
+        duplicate_pairs.sort(key=lambda x: x["similarity"], reverse=True)
+        similarity_counts: Dict[int, int] = {}
+        for pair in duplicate_pairs:
+            s = int(round(pair["similarity"]))
+            similarity_counts[s] = similarity_counts.get(s, 0) + 1
+        result = {"pairs": duplicate_pairs, "similarity_counts": similarity_counts, "total_pairs": len(duplicate_pairs)}
+        duplicate_job_state["result"] = result
+        duplicate_job_state["status"] = "done"
+        _set_progress("Fertig.", 1, 1)
+        log.info("Duplicate job done: %s pairs", len(duplicate_pairs))
+    except Exception as e:
+        log.exception("Duplicate job error")
+        duplicate_job_state["status"] = "error"
+        duplicate_job_state["error"] = str(e)
+        duplicate_job_state["result"] = None
+
+
+@app.post("/api/duplicates/start")
+async def start_duplicate_job():
+    """Startet die Duplikat-Suche im Hintergrund (für Polling-Fallback)."""
+    if duplicate_job_state["status"] == "running":
+        raise HTTPException(status_code=409, detail="Job läuft bereits.")
+    duplicate_job_state["status"] = "idle"
+    duplicate_job_state["result"] = None
+    duplicate_job_state["error"] = None
+    asyncio.create_task(_run_duplicate_job())
+    return JSONResponse({"status": "started"}, status_code=202)
+
+
+@app.get("/api/duplicates/status")
+async def duplicate_job_status():
+    """Fortschritt und Ergebnis der Duplikat-Suche (für Polling)."""
+    return duplicate_job_state
 
 
 async def _run_bulk_delete_perfect_duplicates() -> None:
