@@ -149,7 +149,71 @@ async def get_duplicates():
 
     duplicate_pairs.sort(key=lambda x: x["similarity"], reverse=True)
 
-    return {"pairs": duplicate_pairs}
+    similarity_counts: Dict[int, int] = {}
+    for pair in duplicate_pairs:
+        s = int(round(pair["similarity"]))
+        similarity_counts[s] = similarity_counts.get(s, 0) + 1
+
+    return {
+        "pairs": duplicate_pairs,
+        "similarity_counts": similarity_counts,
+        "total_pairs": len(duplicate_pairs),
+    }
+
+
+@app.post("/api/delete-perfect-duplicates")
+async def delete_perfect_duplicates():
+    """
+    Löscht alle Duplikate mit 100 % (gleiche Checksumme), behält pro Checksumme genau ein Dokument.
+    Auswahl des zu behaltenden Dokuments: nach created-Datum (falls vorhanden), sonst nach ID.
+    """
+    docs = await fetch_all_documents()
+
+    by_checksum: Dict[str, List[Dict[str, Any]]] = {}
+    for d in docs:
+        checksum = d.get("checksum") or ""
+        if not checksum:
+            continue
+        by_checksum.setdefault(checksum, []).append(d)
+
+    deleted_ids: list[int] = []
+    groups_processed = 0
+
+    async with httpx.AsyncClient(
+        base_url=PAPERLESS_URL,
+        headers=HEADERS,
+        timeout=60.0,
+        follow_redirects=True,
+    ) as client:
+        for checksum, group in by_checksum.items():
+            if len(group) < 2:
+                continue
+            groups_processed += 1
+
+            sorted_group = sorted(
+                group,
+                key=lambda d: ((d.get("created") or ""), d["id"]),
+            )
+            to_keep = sorted_group[0]
+            to_delete = sorted_group[1:]
+
+            for doc in to_delete:
+                doc_id = doc["id"]
+                resp = await client.delete(f"/api/documents/{doc_id}/")
+                if resp.status_code in (200, 204):
+                    deleted_ids.append(doc_id)
+                else:
+                    raise HTTPException(
+                        status_code=resp.status_code,
+                        detail=f"Fehler beim Löschen von Dokument {doc_id}: {resp.text}",
+                    )
+
+    return {
+        "status": "ok",
+        "deleted_ids": deleted_ids,
+        "deleted_count": len(deleted_ids),
+        "groups_processed": groups_processed,
+    }
 
 
 @app.get("/preview/{doc_id}")

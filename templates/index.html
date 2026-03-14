@@ -18,7 +18,22 @@
       </button>
     </header>
 
-    <div id="status" class="mb-4 text-sm text-slate-300">Lade Duplikate...</div>
+    <div id="status" class="mb-2 text-sm text-slate-300">Lade Duplikate...</div>
+
+    <div class="flex flex-wrap items-center gap-3 mb-4">
+      <div class="text-xs text-slate-400">
+        Filter:
+        <select id="similarityFilter" class="bg-slate-900 border border-slate-700 text-slate-100 text-xs rounded px-2 py-1">
+          <option value="all">Alle</option>
+          <option value="100">Nur 100%</option>
+          <option value="ge95">≥ 95%</option>
+          <option value="ge90">≥ 90%</option>
+        </select>
+      </div>
+      <button id="deleteAllPerfectBtn" class="px-3 py-1.5 rounded-md bg-red-600/90 hover:bg-red-500 text-xs font-semibold text-slate-50">
+        Alle 100%-Duplikate bereinigen
+      </button>
+    </div>
 
     <div id="pairsContainer" class="space-y-6"></div>
   </div>
@@ -27,8 +42,33 @@
     const statusEl = document.getElementById("status");
     const container = document.getElementById("pairsContainer");
     const reloadBtn = document.getElementById("reloadBtn");
+    const filterSelect = document.getElementById("similarityFilter");
+    const deleteAllPerfectBtn = document.getElementById("deleteAllPerfectBtn");
 
-    async function loadPairs() {
+    let allPairs = [];
+
+    function passesFilter(pair) {
+      const v = filterSelect.value;
+      if (v === "all") return true;
+      const s = pair.similarity;
+      if (v === "100") return Math.round(s) === 100;
+      if (v === "ge95") return s >= 95;
+      if (v === "ge90") return s >= 90;
+      return true;
+    }
+
+    function renderPairs() {
+      container.innerHTML = "";
+      const visiblePairs = allPairs.filter(passesFilter);
+      if (!visiblePairs.length) {
+        const msg = document.createElement("div");
+        msg.className = "text-sm text-slate-400";
+        msg.textContent = "Keine Duplikate für diesen Filter.";
+        container.appendChild(msg);
+        return;
+      }
+
+      for (const pair of visiblePairs) {
       statusEl.textContent = "Lade Duplikate...";
       container.innerHTML = "";
       try {
@@ -44,9 +84,76 @@
           return;
         }
 
-        statusEl.textContent = pairs.length + " Duplikat-Paar(e) gefunden.";
+        const total = data.total_pairs ?? pairs.length;
+        const counts = data.similarity_counts || {};
+        const count100 = counts["100"] || counts[100] || 0;
+        statusEl.textContent = `${total} Duplikat-Paar(e) gefunden – 100%: ${count100}`;
 
-        for (const pair of pairs) {
+        allPairs = pairs;
+        renderPairs();
+
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "Fehler beim Laden der Duplikate: " + err;
+      }
+    }
+
+    async function deleteDoc(keepId, removeId, cardElement) {
+      try {
+        const resp = await fetch("/api/delete", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ keep_id: keepId, remove_id: removeId }),
+        });
+        if (!resp.ok) {
+          const text = await resp.text();
+          alert("Fehler beim Löschen: " + text);
+          return;
+        }
+        cardElement.remove();
+      } catch (err) {
+        console.error(err);
+        alert("Fehler beim Löschen: " + err);
+      }
+    }
+
+    async function deleteAllPerfect() {
+      if (!confirm("Alle 100%-Duplikat-Gruppen automatisch bereinigen? Es bleibt jeweils ein Dokument pro Gruppe übrig.")) {
+        return;
+      }
+      try {
+        deleteAllPerfectBtn.disabled = true;
+        deleteAllPerfectBtn.textContent = "Bereinige 100%-Duplikate...";
+        const resp = await fetch("/api/delete-perfect-duplicates", {
+          method: "POST",
+        });
+        if (!resp.ok) {
+          const text = await resp.text();
+          alert("Fehler beim Bereinigen: " + text);
+          return;
+        }
+        const data = await resp.json();
+        alert(`Fertig. Gelöscht: ${data.deleted_count} Dokument(e) in ${data.groups_processed} Duplikat-Gruppen.`);
+        await loadPairs();
+      } catch (err) {
+        console.error(err);
+        alert("Fehler beim Bereinigen: " + err);
+      } finally {
+        deleteAllPerfectBtn.disabled = false;
+        deleteAllPerfectBtn.textContent = "Alle 100%-Duplikate bereinigen";
+      }
+    }
+
+    reloadBtn.addEventListener("click", loadPairs);
+    filterSelect.addEventListener("change", renderPairs);
+    deleteAllPerfectBtn.addEventListener("click", deleteAllPerfect);
+    loadPairs();
+  </script>
+</body>
+</html>
+
           const card = document.createElement("div");
           card.className = "bg-slate-900/60 border border-slate-800 rounded-xl p-4 shadow-lg";
 
