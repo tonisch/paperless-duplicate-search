@@ -30,7 +30,12 @@ async def index(request: Request):
 
 async def fetch_all_documents() -> List[Dict[str, Any]]:
     docs: List[Dict[str, Any]] = []
-    async with httpx.AsyncClient(base_url=PAPERLESS_URL, headers=HEADERS, timeout=60.0) as client:
+    async with httpx.AsyncClient(
+        base_url=PAPERLESS_URL,
+        headers=HEADERS,
+        timeout=60.0,
+        follow_redirects=True,
+    ) as client:
         url: str | None = "/api/documents/"
         while url:
             resp = await client.get(url)
@@ -141,7 +146,12 @@ async def get_duplicates():
 
 @app.get("/preview/{doc_id}")
 async def proxy_preview(doc_id: int):
-    async with httpx.AsyncClient(base_url=PAPERLESS_URL, headers=HEADERS, timeout=60.0) as client:
+    async with httpx.AsyncClient(
+        base_url=PAPERLESS_URL,
+        headers=HEADERS,
+        timeout=60.0,
+        follow_redirects=True,
+    ) as client:
         url_preview = f"/api/documents/{doc_id}/preview/"
         try:
             resp = await client.get(url_preview)
@@ -175,7 +185,12 @@ async def delete_document(body: Dict[str, Any]):
             detail="keep_id und remove_id müssen verschieden sein",
         )
 
-    async with httpx.AsyncClient(base_url=PAPERLESS_URL, headers=HEADERS, timeout=60.0) as client:
+    async with httpx.AsyncClient(
+        base_url=PAPERLESS_URL,
+        headers=HEADERS,
+        timeout=60.0,
+        follow_redirects=True,
+    ) as client:
         resp = await client.delete(f"/api/documents/{remove_id}/")
         if resp.status_code not in (204, 200):
             raise HTTPException(status_code=resp.status_code, detail=f"Fehler beim Löschen: {resp.text}")
