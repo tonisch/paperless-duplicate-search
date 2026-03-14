@@ -71,21 +71,46 @@
           const previewWrapper = document.createElement("div");
           previewWrapper.className = "grid grid-cols-1 md:grid-cols-2 gap-4 mb-4";
 
+          function formatCorrespondent(c) {
+            if (!c) return "(kein Korrespondent)";
+            if (typeof c === "string" || typeof c === "number") return "Korrespondent #" + c;
+            if (c.name) return c.name;
+            if (c.id) return "Korrespondent #" + c.id;
+            return "(kein Korrespondent)";
+          }
+
+          function formatTags(tags) {
+            if (!tags || tags.length === 0) return "Keine Tags";
+            const names = tags.map((t) => {
+              if (typeof t === "string" || typeof t === "number") return "#" + t;
+              if (t.name) return t.name;
+              if (t.slug) return t.slug;
+              if (t.id) return "#" + t.id;
+              return "";
+            }).filter(Boolean);
+            if (!names.length) return "Keine Tags";
+            return names.join(", ");
+          }
+
           const leftCol = document.createElement("div");
           leftCol.innerHTML = `
             <div class="text-sm font-medium mb-1">${pair.a.title || "(kein Titel)"}</div>
-            <div class="text-xs text-slate-400 mb-2">ID ${pair.a.id}</div>
-            <div class="aspect-[3/4] bg-slate-950/60 border border-slate-800 rounded-lg overflow-hidden flex items-center justify-center">
-              <iframe src="${pair.a.preview_url}" class="w-full h-full" loading="lazy"></iframe>
+            <div class="text-xs text-slate-400 mb-1">ID ${pair.a.id}</div>
+            <div class="text-xs text-slate-400 mb-1">Korrespondent: ${formatCorrespondent(pair.a.correspondent)}</div>
+            <div class="text-xs text-slate-400 mb-2">Tags: ${formatTags(pair.a.tags)}</div>
+            <div class="bg-slate-950/60 border border-slate-800 rounded-lg overflow-hidden flex items-center justify-center h-56">
+              <iframe src="${pair.a.preview_url}" class="w-full h-full scale-75 origin-top" loading="lazy"></iframe>
             </div>
           `;
 
           const rightCol = document.createElement("div");
           rightCol.innerHTML = `
             <div class="text-sm font-medium mb-1">${pair.b.title || "(kein Titel)"}</div>
-            <div class="text-xs text-slate-400 mb-2">ID ${pair.b.id}</div>
-            <div class="aspect-[3/4] bg-slate-950/60 border border-slate-800 rounded-lg overflow-hidden flex items-center justify-center">
-              <iframe src="${pair.b.preview_url}" class="w-full h-full" loading="lazy"></iframe>
+            <div class="text-xs text-slate-400 mb-1">ID ${pair.b.id}</div>
+            <div class="text-xs text-slate-400 mb-1">Korrespondent: ${formatCorrespondent(pair.b.correspondent)}</div>
+            <div class="text-xs text-slate-400 mb-2">Tags: ${formatTags(pair.b.tags)}</div>
+            <div class="bg-slate-950/60 border border-slate-800 rounded-lg overflow-hidden flex items-center justify-center h-56">
+              <iframe src="${pair.b.preview_url}" class="w-full h-full scale-75 origin-top" loading="lazy"></iframe>
             </div>
           `;
 
