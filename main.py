@@ -164,20 +164,66 @@ async def get_duplicates():
 @app.post("/api/delete-perfect-duplicates")
 async def delete_perfect_duplicates():
     """
-    Löscht alle Duplikate mit 100 % (gleiche Checksumme), behält pro Checksumme genau ein Dokument.
+    Löscht alle Duplikate mit 100 % Ähnlichkeit (similar_title_and_content),
+    behält pro zusammenhängender Duplikat-Gruppe genau ein Dokument.
     Auswahl des zu behaltenden Dokuments: nach created-Datum (falls vorhanden), sonst nach ID.
     """
     docs = await fetch_all_documents()
 
-    by_checksum: Dict[str, List[Dict[str, Any]]] = {}
-    for d in docs:
-        checksum = d.get("checksum") or ""
-        if not checksum:
-            continue
-        by_checksum.setdefault(checksum, []).append(d)
-
     deleted_ids: list[int] = []
     groups_processed = 0
+
+    # Index für schnellen Zugriff
+    docs_by_id: Dict[int, Dict[str, Any]] = {d["id"]: d for d in docs if "id" in d}
+
+    # 1) 100%-Paare (similar_title_and_content) finden
+    by_title: Dict[str, List[Dict[str, Any]]] = {}
+    for d in docs:
+        title = (d.get("title") or d.get("original_filename") or "").strip().lower()
+        if len(title) < 5:
+            continue
+        by_title.setdefault(title, []).append(d)
+
+    # Graph der 100%-Duplikate aufbauen
+    adjacency: Dict[int, set[int]] = {}
+
+    for title, group in by_title.items():
+        if len(group) < 2:
+            continue
+        n = len(group)
+        for i in range(n):
+            for j in range(i + 1, n):
+                a = group[i]
+                b = group[j]
+                # Inhalte vergleichen
+                sim = compute_similarity(a.get("content", ""), b.get("content", ""))
+                if int(round(sim)) != 100:
+                    continue
+
+                ida = a["id"]
+                idb = b["id"]
+                adjacency.setdefault(ida, set()).add(idb)
+                adjacency.setdefault(idb, set()).add(ida)
+
+    # 2) Verbundkomponenten im Graphen finden
+    visited: set[int] = set()
+    components: List[List[int]] = []
+
+    for node in adjacency.keys():
+        if node in visited:
+            continue
+        stack = [node]
+        comp: List[int] = []
+        visited.add(node)
+        while stack:
+            cur = stack.pop()
+            comp.append(cur)
+            for nei in adjacency.get(cur, ()):
+                if nei not in visited:
+                    visited.add(nei)
+                    stack.append(nei)
+        if len(comp) > 1:
+            components.append(comp)
 
     async with httpx.AsyncClient(
         base_url=PAPERLESS_URL,
@@ -185,20 +231,21 @@ async def delete_perfect_duplicates():
         timeout=60.0,
         follow_redirects=True,
     ) as client:
-        for checksum, group in by_checksum.items():
-            if len(group) < 2:
-                continue
+        for comp in components:
             groups_processed += 1
 
-            sorted_group = sorted(
-                group,
-                key=lambda d: ((d.get("created") or ""), d["id"]),
+            # Innerhalb der Komponente ein Dokument behalten, Rest löschen
+            sorted_ids = sorted(
+                comp,
+                key=lambda doc_id: (
+                    (docs_by_id.get(doc_id, {}).get("created") or ""),
+                    doc_id,
+                ),
             )
-            to_keep = sorted_group[0]
-            to_delete = sorted_group[1:]
+            to_keep_id = sorted_ids[0]
+            to_delete_ids = sorted_ids[1:]
 
-            for doc in to_delete:
-                doc_id = doc["id"]
+            for doc_id in to_delete_ids:
                 resp = await client.delete(f"/api/documents/{doc_id}/")
                 if resp.status_code in (200, 204):
                     deleted_ids.append(doc_id)
