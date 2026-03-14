@@ -29,6 +29,18 @@
     </header>
 
     <div id="status" class="mb-2 text-sm text-slate-300">Lade Duplikate...</div>
+    <div id="progressSection" class="mb-3 hidden">
+      <div class="flex items-center gap-2 mb-1">
+        <div class="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden">
+          <div id="progressBar" class="h-full bg-emerald-500 transition-all duration-300" style="width: 0%"></div>
+        </div>
+        <span id="progressPercent" class="text-xs text-slate-400 w-10">0%</span>
+      </div>
+      <details class="mt-1" open>
+        <summary class="cursor-pointer text-xs text-slate-500 hover:text-slate-400">Log</summary>
+        <pre id="loadLog" class="mt-1 p-2 bg-slate-900/80 border border-slate-800 rounded text-xs text-slate-400 font-mono max-h-32 overflow-auto whitespace-pre-wrap"></pre>
+      </details>
+    </div>
 
     <div class="flex flex-wrap items-center gap-3 mb-2">
       <div class="text-xs text-slate-400 flex items-center gap-2">
@@ -471,17 +483,102 @@
       });
     }
 
+    function showProgress(show) {
+      const section = document.getElementById("progressSection");
+      const logEl = document.getElementById("loadLog");
+      if (show) {
+        section.classList.remove("hidden");
+        logEl.textContent = "";
+        document.getElementById("progressBar").style.width = "0%";
+        document.getElementById("progressPercent").textContent = "0%";
+      } else {
+        section.classList.add("hidden");
+      }
+    }
+
+    function updateProgress(current, total, message) {
+      const bar = document.getElementById("progressBar");
+      const percentEl = document.getElementById("progressPercent");
+      const logEl = document.getElementById("loadLog");
+      let pct = 0;
+      if (total != null && total > 0) {
+        pct = Math.min(100, Math.round((100 * current) / total));
+      } else if (current > 0) {
+        pct = 50; // indeterminate-style
+      }
+      bar.style.width = pct + "%";
+      percentEl.textContent = total != null ? pct + "%" : "…";
+      if (message) {
+        const line = "[" + new Date().toLocaleTimeString() + "] " + message + "\n";
+        logEl.textContent += line;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+    }
+
     async function loadPairs() {
       statusEl.textContent = t().loading;
       container.innerHTML = "";
+      showProgress(true);
+      const logEl = document.getElementById("loadLog");
+      logEl.textContent = "[" + new Date().toLocaleTimeString() + "] " + (currentLang === "de" ? "Starte Abfrage…" : "Starting request…") + "\n";
+
       try {
         const resp = await fetch("/api/duplicates");
         if (!resp.ok) {
           throw new Error("HTTP " + resp.status);
         }
-        const data = await resp.json();
-        const pairs = data.pairs || [];
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let resultData = null;
+        let errorMessage = null;
 
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            try {
+              const obj = JSON.parse(trimmed);
+              if (obj.event === "progress") {
+                updateProgress(obj.current ?? 0, obj.total ?? null, obj.message ?? "");
+              } else if (obj.event === "result") {
+                resultData = obj.data;
+              } else if (obj.event === "error") {
+                errorMessage = obj.message || "Unbekannter Fehler";
+              }
+            } catch (e) {
+              console.warn("Parse line:", trimmed, e);
+            }
+          }
+        }
+        if (buffer.trim()) {
+          try {
+            const obj = JSON.parse(buffer.trim());
+            if (obj.event === "result") resultData = obj.data;
+            else if (obj.event === "error") errorMessage = obj.message;
+          } catch (_) {}
+        }
+
+        if (!errorMessage && resultData) {
+          updateProgress(1, 1, currentLang === "de" ? "Fertig." : "Done.");
+        }
+        showProgress(false);
+        if (errorMessage) {
+          statusEl.textContent = t().errorLoadDuplicates + ": " + errorMessage;
+          logEl.textContent += "[" + new Date().toLocaleTimeString() + "] FEHLER: " + errorMessage + "\n";
+          return;
+        }
+        if (!resultData) {
+          statusEl.textContent = t().errorLoadDuplicates + " (keine Daten)";
+          return;
+        }
+
+        const pairs = resultData.pairs || [];
         if (pairs.length === 0) {
           statusEl.textContent = t().noneFound;
           allPairs = [];
@@ -490,8 +587,8 @@
           return;
         }
 
-        const total = data.total_pairs ?? pairs.length;
-        const counts = data.similarity_counts || {};
+        const total = resultData.total_pairs ?? pairs.length;
+        const counts = resultData.similarity_counts || {};
         const count100 = counts["100"] || counts[100] || 0;
         statusEl.textContent = t().statusSummary(total, count100);
 
@@ -500,7 +597,9 @@
         renderPairs();
       } catch (err) {
         console.error(err);
-        statusEl.textContent = `${t().errorLoadDuplicates}: ${err}`;
+        showProgress(false);
+        statusEl.textContent = `${t().errorLoadDuplicates}: ${err.message || err}`;
+        logEl.textContent += "[" + new Date().toLocaleTimeString() + "] " + (currentLang === "de" ? "Fehler:" : "Error:") + " " + (err.message || err) + "\n";
       }
     }
 

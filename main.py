@@ -1,6 +1,8 @@
+import json
+import logging
 import os
 import asyncio
-from typing import List, Dict, Any
+from typing import List, Dict, Any, AsyncGenerator
 
 from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
@@ -14,6 +16,9 @@ PAPERLESS_TOKEN = os.getenv("PAPERLESS_TOKEN")
 
 if not PAPERLESS_URL or not PAPERLESS_TOKEN:
     raise RuntimeError("PAPERLESS_URL und PAPERLESS_TOKEN müssen als Umgebungsvariablen gesetzt sein.")
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
 HEADERS = {
     "Authorization": f"Token {PAPERLESS_TOKEN}",
@@ -38,20 +43,25 @@ async def index(request: Request):
 
 async def fetch_all_documents() -> List[Dict[str, Any]]:
     docs: List[Dict[str, Any]] = []
+    log.info("Fetching documents from Paperless...")
     async with httpx.AsyncClient(
         base_url=PAPERLESS_URL,
         headers=HEADERS,
-        timeout=60.0,
+        timeout=120.0,
         follow_redirects=True,
     ) as client:
         url: str | None = "/api/documents/"
+        page = 0
         while url:
+            page += 1
             resp = await client.get(url)
             resp.raise_for_status()
             data = resp.json()
             results = data.get("results", [])
             docs.extend(results)
+            log.info("Documents page %s: %s docs (total so far: %s)", page, len(results), len(docs))
             url = data.get("next")
+    log.info("Fetched %s documents total", len(docs))
     return docs
 
 
@@ -68,105 +78,98 @@ def build_preview_path(doc_id: int) -> str:
     return f"/preview/{doc_id}"
 
 
-@app.get("/api/duplicates")
-async def get_duplicates():
-    docs = await fetch_all_documents()
+def _yield_line(obj: dict) -> str:
+    return json.dumps(obj, ensure_ascii=False) + "\n"
 
-    by_checksum: Dict[str, List[Dict[str, Any]]] = {}
-    for d in docs:
-        checksum = d.get("checksum") or ""
-        if not checksum:
-            continue
-        by_checksum.setdefault(checksum, []).append(d)
 
-    duplicate_pairs: List[Dict[str, Any]] = []
+async def stream_duplicates() -> AsyncGenerator[str, None]:
+    """Yields NDJSON: progress events, then one result event."""
+    try:
+        yield _yield_line({"event": "progress", "phase": "fetch", "message": "Lade Dokumente von Paperless…", "current": 0, "total": None})
+        log.info("Duplicates: fetching documents...")
+        docs = await fetch_all_documents()
+        yield _yield_line({"event": "progress", "phase": "fetch", "message": f"{len(docs)} Dokumente geladen", "current": len(docs), "total": len(docs)})
 
-    for checksum, group in by_checksum.items():
-        if len(group) < 2:
-            continue
-        n = len(group)
-        for i in range(n):
-            for j in range(i + 1, n):
-                a = group[i]
-                b = group[j]
-                duplicate_pairs.append(
-                    {
-                        "a": {
-                            "id": a["id"],
-                            "title": a.get("title") or a.get("original_filename"),
-                            "created": a.get("created"),
-                            "correspondent": a.get("correspondent"),
-                            "tags": a.get("tags", []),
-                            "preview_url": build_preview_path(a["id"]),
-                        },
-                        "b": {
-                            "id": b["id"],
-                            "title": b.get("title") or b.get("original_filename"),
-                            "created": b.get("created"),
-                            "correspondent": b.get("correspondent"),
-                            "tags": b.get("tags", []),
-                            "preview_url": build_preview_path(b["id"]),
-                        },
+        yield _yield_line({"event": "progress", "phase": "checksum", "message": "Suche Duplikate nach Checksum…", "current": 0, "total": None})
+        by_checksum: Dict[str, List[Dict[str, Any]]] = {}
+        for d in docs:
+            checksum = d.get("checksum") or ""
+            if not checksum:
+                continue
+            by_checksum.setdefault(checksum, []).append(d)
+
+        duplicate_pairs: List[Dict[str, Any]] = []
+        for checksum, group in by_checksum.items():
+            if len(group) < 2:
+                continue
+            n = len(group)
+            for i in range(n):
+                for j in range(i + 1, n):
+                    a, b = group[i], group[j]
+                    duplicate_pairs.append({
+                        "a": {"id": a["id"], "title": a.get("title") or a.get("original_filename"), "created": a.get("created"), "correspondent": a.get("correspondent"), "tags": a.get("tags", []), "preview_url": build_preview_path(a["id"])},
+                        "b": {"id": b["id"], "title": b.get("title") or b.get("original_filename"), "created": b.get("created"), "correspondent": b.get("correspondent"), "tags": b.get("tags", []), "preview_url": build_preview_path(b["id"])},
                         "similarity": 100.0,
                         "reason": "same_checksum",
-                    }
-                )
+                    })
+        log.info("Checksum duplicates: %s pairs", len(duplicate_pairs))
+        yield _yield_line({"event": "progress", "phase": "checksum", "message": f"{len(duplicate_pairs)} 100%%-Duplikate (Checksum)", "current": len(duplicate_pairs), "total": None})
 
-    by_title: Dict[str, List[Dict[str, Any]]] = {}
-    for d in docs:
-        title = (d.get("title") or d.get("original_filename") or "").strip().lower()
-        if len(title) < 5:
-            continue
-        by_title.setdefault(title, []).append(d)
+        yield _yield_line({"event": "progress", "phase": "title", "message": "Gruppiere nach Titel…", "current": 0, "total": None})
+        by_title: Dict[str, List[Dict[str, Any]]] = {}
+        for d in docs:
+            title = (d.get("title") or d.get("original_filename") or "").strip().lower()
+            if len(title) < 5:
+                continue
+            by_title.setdefault(title, []).append(d)
 
-    for title, group in by_title.items():
-        if len(group) < 2:
-            continue
-        n = len(group)
-        for i in range(n):
-            for j in range(i + 1, n):
-                a = group[i]
-                b = group[j]
-                if a.get("checksum") and b.get("checksum") and a["checksum"] == b["checksum"]:
-                    continue
-                sim = compute_similarity(a.get("content", ""), b.get("content", ""))
-                if sim < 80.0:
-                    continue
-                duplicate_pairs.append(
-                    {
-                        "a": {
-                            "id": a["id"],
-                            "title": a.get("title") or a.get("original_filename"),
-                            "created": a.get("created"),
-                            "correspondent": a.get("correspondent"),
-                            "tags": a.get("tags", []),
-                            "preview_url": build_preview_path(a["id"]),
-                        },
-                        "b": {
-                            "id": b["id"],
-                            "title": b.get("title") or b.get("original_filename"),
-                            "created": b.get("created"),
-                            "correspondent": b.get("correspondent"),
-                            "tags": b.get("tags", []),
-                            "preview_url": build_preview_path(b["id"]),
-                        },
+        title_groups = [(t, g) for t, g in by_title.items() if len(g) >= 2]
+        total_compare = sum(len(g) * (len(g) - 1) // 2 for _, g in title_groups)
+        yield _yield_line({"event": "progress", "phase": "compare", "message": f"Vergleiche Inhalt von {total_compare} Kandidaten-Paaren…", "current": 0, "total": total_compare})
+
+        done = 0
+        for title, group in title_groups:
+            n = len(group)
+            for i in range(n):
+                for j in range(i + 1, n):
+                    a, b = group[i], group[j]
+                    if a.get("checksum") and b.get("checksum") and a["checksum"] == b["checksum"]:
+                        done += 1
+                        continue
+                    sim = compute_similarity(a.get("content", ""), b.get("content", ""))
+                    done += 1
+                    if done % 50 == 0 or done == total_compare:
+                        yield _yield_line({"event": "progress", "phase": "compare", "message": f"Verglichen: {done}/{total_compare}", "current": done, "total": total_compare})
+                    if sim < 80.0:
+                        continue
+                    duplicate_pairs.append({
+                        "a": {"id": a["id"], "title": a.get("title") or a.get("original_filename"), "created": a.get("created"), "correspondent": a.get("correspondent"), "tags": a.get("tags", []), "preview_url": build_preview_path(a["id"])},
+                        "b": {"id": b["id"], "title": b.get("title") or b.get("original_filename"), "created": b.get("created"), "correspondent": b.get("correspondent"), "tags": b.get("tags", []), "preview_url": build_preview_path(b["id"])},
                         "similarity": sim,
                         "reason": "similar_title_and_content",
-                    }
-                )
+                    })
 
-    duplicate_pairs.sort(key=lambda x: x["similarity"], reverse=True)
+        duplicate_pairs.sort(key=lambda x: x["similarity"], reverse=True)
+        similarity_counts: Dict[int, int] = {}
+        for pair in duplicate_pairs:
+            s = int(round(pair["similarity"]))
+            similarity_counts[s] = similarity_counts.get(s, 0) + 1
 
-    similarity_counts: Dict[int, int] = {}
-    for pair in duplicate_pairs:
-        s = int(round(pair["similarity"]))
-        similarity_counts[s] = similarity_counts.get(s, 0) + 1
+        log.info("Total duplicate pairs: %s", len(duplicate_pairs))
+        result = {"pairs": duplicate_pairs, "similarity_counts": similarity_counts, "total_pairs": len(duplicate_pairs)}
+        yield _yield_line({"event": "result", "data": result})
+    except Exception as e:
+        log.exception("Error in stream_duplicates")
+        yield _yield_line({"event": "error", "message": str(e)})
 
-    return {
-        "pairs": duplicate_pairs,
-        "similarity_counts": similarity_counts,
-        "total_pairs": len(duplicate_pairs),
-    }
+
+@app.get("/api/duplicates")
+async def get_duplicates():
+    return StreamingResponse(
+        stream_duplicates(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 async def _run_bulk_delete_perfect_duplicates() -> None:
