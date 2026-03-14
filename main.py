@@ -349,6 +349,43 @@ async def delete_document(body: Dict[str, Any]):
     return JSONResponse({"status": "ok", "deleted_id": remove_id})
 
 
+@app.post("/api/bulk-delete")
+async def bulk_delete(body: Dict[str, Any]):
+    """
+    Löscht explizit ausgewählte Dokumente.
+    Erwartet JSON:
+    { "ids": [1, 2, 3, ...] }
+    """
+    ids = body.get("ids") or []
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ids muss eine nicht-leere Liste von IDs sein",
+        )
+
+    unique_ids = sorted(set(int(i) for i in ids))
+    deleted_ids: list[int] = []
+
+    async with httpx.AsyncClient(
+        base_url=PAPERLESS_URL,
+        headers=HEADERS,
+        timeout=60.0,
+        follow_redirects=True,
+    ) as client:
+        for doc_id in unique_ids:
+            resp = await client.delete(f"/api/documents/{doc_id}/")
+            if resp.status_code in (200, 204, 404):
+                # 404 ignorieren, falls schon weg
+                deleted_ids.append(doc_id)
+            else:
+                raise HTTPException(
+                    status_code=resp.status_code,
+                    detail=f"Fehler beim Löschen von Dokument {doc_id}: {resp.text}",
+                )
+
+    return {"status": "ok", "deleted_ids": deleted_ids, "deleted_count": len(deleted_ids)}
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}

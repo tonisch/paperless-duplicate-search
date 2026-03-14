@@ -5,6 +5,7 @@
   <title>Paperless Duplikate</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen">
   <div class="max-w-6xl mx-auto py-8 px-4">
@@ -20,9 +21,9 @@
 
     <div id="status" class="mb-2 text-sm text-slate-300">Lade Duplikate...</div>
 
-    <div class="flex flex-wrap items-center gap-3 mb-4">
-      <div class="text-xs text-slate-400">
-        Filter:
+    <div class="flex flex-wrap items-center gap-3 mb-2">
+      <div class="text-xs text-slate-400 flex items-center gap-2">
+        <span>Filter:</span>
         <select id="similarityFilter" class="bg-slate-900 border border-slate-700 text-slate-100 text-xs rounded px-2 py-1">
           <option value="all">Alle</option>
           <option value="100">Nur 100%</option>
@@ -30,12 +31,26 @@
           <option value="ge90">≥ 90%</option>
         </select>
       </div>
-      <button id="deleteAllPerfectBtn" class="px-3 py-1.5 rounded-md bg-red-600/90 hover:bg-red-500 text-xs font-semibold text-slate-50">
+      <label class="flex items-center gap-1 text-xs text-slate-400">
+        <input type="checkbox" id="selectAllVisible" class="rounded border-slate-600 bg-slate-900" />
+        <span>Alle sichtbaren auswählen</span>
+      </label>
+      <button id="deleteSelectedBtn" class="px-3 py-1.5 rounded-md bg-red-500/90 hover:bg-red-400 text-xs font-semibold text-slate-900">
+        Ausgewählte löschen
+      </button>
+      <button id="deleteAllPerfectBtn" class="px-3 py-1.5 rounded-md bg-red-700/90 hover:bg-red-600 text-xs font-semibold text-slate-50">
         Alle 100%-Duplikate bereinigen
       </button>
     </div>
 
-    <div id="pairsContainer" class="space-y-6"></div>
+    <section class="mb-6">
+      <h2 class="text-sm font-semibold text-slate-200 mb-2">Statistik</h2>
+      <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-3">
+        <canvas id="similarityChart" class="w-full h-40"></canvas>
+      </div>
+    </section>
+
+    <div id="pairsContainer" class="space-y-4"></div>
   </div>
 
   <script>
@@ -44,8 +59,12 @@
     const reloadBtn = document.getElementById("reloadBtn");
     const filterSelect = document.getElementById("similarityFilter");
     const deleteAllPerfectBtn = document.getElementById("deleteAllPerfectBtn");
+    const selectAllVisibleCheckbox = document.getElementById("selectAllVisible");
+    const deleteSelectedBtn = document.getElementById("deleteSelectedBtn");
 
     let allPairs = [];
+    let selectedDocIds = new Set();
+    let similarityChart = null;
 
     function passesFilter(pair) {
       const v = filterSelect.value;
@@ -92,11 +111,13 @@
       }
 
       for (const pair of visiblePairs) {
+        const aId = pair.a.id;
+        const bId = pair.b.id;
         const card = document.createElement("div");
         card.className = "bg-slate-900/60 border border-slate-800 rounded-xl p-4 shadow-lg";
 
         const header = document.createElement("div");
-        header.className = "flex items-center justify-between mb-4";
+        header.className = "flex items-center justify-between mb-4 gap-2";
 
         const leftInfo = document.createElement("div");
         leftInfo.innerHTML = `
@@ -107,8 +128,10 @@
         `;
 
         const rightInfo = document.createElement("div");
-        rightInfo.className = "text-right text-xs text-slate-400";
-        rightInfo.textContent = "ID " + pair.a.id + " ↔ ID " + pair.b.id;
+        rightInfo.className = "flex items-center gap-3 text-xs text-slate-400";
+        rightInfo.innerHTML = `
+          <span>ID ${aId} ↔ ID ${bId}</span>
+        `;
 
         header.appendChild(leftInfo);
         header.appendChild(rightInfo);
@@ -118,8 +141,14 @@
 
         const leftCol = document.createElement("div");
         leftCol.innerHTML = `
-          <div class="text-sm font-medium mb-1">${pair.a.title || "(kein Titel)"}</div>
-          <div class="text-xs text-slate-400 mb-1">ID ${pair.a.id}</div>
+          <div class="flex items-center justify-between gap-2 mb-1">
+            <div class="text-sm font-medium truncate">${pair.a.title || "(kein Titel)"}</div>
+            <label class="flex items-center gap-1 text-xs text-slate-400 whitespace-nowrap">
+              <input type="checkbox" class="doc-checkbox" data-doc-id="${aId}" />
+              <span>wählen</span>
+            </label>
+          </div>
+          <div class="text-xs text-slate-400 mb-1">ID ${aId}</div>
           <div class="text-xs text-slate-400 mb-1">Korrespondent: ${formatCorrespondent(pair.a.correspondent)}</div>
           <div class="text-xs text-slate-400 mb-2">Tags: ${formatTags(pair.a.tags)}</div>
           <div class="bg-slate-950/60 border border-slate-800 rounded-lg overflow-hidden flex items-center justify-center h-56">
@@ -129,8 +158,14 @@
 
         const rightCol = document.createElement("div");
         rightCol.innerHTML = `
-          <div class="text-sm font-medium mb-1">${pair.b.title || "(kein Titel)"}</div>
-          <div class="text-xs text-slate-400 mb-1">ID ${pair.b.id}</div>
+          <div class="flex items-center justify-between gap-2 mb-1">
+            <div class="text-sm font-medium truncate">${pair.b.title || "(kein Titel)"}</div>
+            <label class="flex items-center gap-1 text-xs text-slate-400 whitespace-nowrap">
+              <input type="checkbox" class="doc-checkbox" data-doc-id="${bId}" />
+              <span>wählen</span>
+            </label>
+          </div>
+          <div class="text-xs text-slate-400 mb-1">ID ${bId}</div>
           <div class="text-xs text-slate-400 mb-1">Korrespondent: ${formatCorrespondent(pair.b.correspondent)}</div>
           <div class="text-xs text-slate-400 mb-2">Tags: ${formatTags(pair.b.tags)}</div>
           <div class="bg-slate-950/60 border border-slate-800 rounded-lg overflow-hidden flex items-center justify-center h-56">
@@ -176,6 +211,22 @@
         card.appendChild(actions);
 
         container.appendChild(card);
+
+        // Checkbox-Status setzen und Listener
+        card.querySelectorAll(".doc-checkbox").forEach((cb) => {
+          const id = parseInt(cb.getAttribute("data-doc-id"), 10);
+          if (selectedDocIds.has(id)) {
+            cb.checked = true;
+          }
+          cb.addEventListener("change", (e) => {
+            if (e.target.checked) {
+              selectedDocIds.add(id);
+            } else {
+              selectedDocIds.delete(id);
+              selectAllVisibleCheckbox.checked = false;
+            }
+          });
+        });
       }
     }
 
@@ -203,6 +254,7 @@
         statusEl.textContent = `${total} Duplikat-Paar(e) gefunden – 100%: ${count100}`;
 
         allPairs = pairs;
+        updateChart(counts);
         renderPairs();
       } catch (err) {
         console.error(err);
@@ -224,11 +276,92 @@
           alert("Fehler beim Löschen: " + text);
           return;
         }
+        const idsToRemove = [keepId, removeId];
+        idsToRemove.forEach((id) => selectedDocIds.delete(id));
         cardElement.remove();
       } catch (err) {
         console.error(err);
         alert("Fehler beim Löschen: " + err);
       }
+    }
+
+    async function deleteSelected() {
+      const ids = Array.from(selectedDocIds);
+      if (!ids.length) {
+        alert("Keine Dokumente ausgewählt.");
+        return;
+      }
+      if (!confirm(`${ids.length} ausgewählte Dokument(e) wirklich löschen?`)) {
+        return;
+      }
+      try {
+        deleteSelectedBtn.disabled = true;
+        deleteSelectedBtn.textContent = "Lösche Auswahl…";
+        const resp = await fetch("/api/bulk-delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids }),
+        });
+        if (!resp.ok) {
+          const text = await resp.text();
+          alert("Fehler beim Löschen der Auswahl: " + text);
+          return;
+        }
+        const data = await resp.json();
+        const deleted = data.deleted_ids || ids;
+        deleted.forEach((id) => selectedDocIds.delete(id));
+        await loadPairs();
+      } catch (err) {
+        console.error(err);
+        alert("Fehler beim Löschen der Auswahl: " + err);
+      } finally {
+        deleteSelectedBtn.disabled = false;
+        deleteSelectedBtn.textContent = "Ausgewählte löschen";
+        selectAllVisibleCheckbox.checked = false;
+      }
+    }
+
+    function updateChart(similarityCounts) {
+      const ctx = document.getElementById("similarityChart").getContext("2d");
+      const entries = Object.entries(similarityCounts || {}).sort(
+        (a, b) => parseInt(a[0], 10) - parseInt(b[0], 10)
+      );
+      const labels = entries.map(([k]) => k + "%");
+      const values = entries.map(([, v]) => v);
+
+      if (similarityChart) {
+        similarityChart.destroy();
+      }
+
+      similarityChart = new Chart(ctx, {
+        type: "bar",
+        data: {
+          labels,
+          datasets: [
+            {
+              label: "Anzahl Paare",
+              data: values,
+              backgroundColor: "rgba(16, 185, 129, 0.6)",
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { display: false },
+          },
+          scales: {
+            x: {
+              ticks: { color: "#94a3b8", font: { size: 10 } },
+              grid: { display: false },
+            },
+            y: {
+              ticks: { color: "#94a3b8", precision: 0 },
+              grid: { color: "rgba(148, 163, 184, 0.2)" },
+            },
+          },
+        },
+      });
     }
 
     async function deleteAllPerfect() {
@@ -289,6 +422,20 @@
     reloadBtn.addEventListener("click", loadPairs);
     filterSelect.addEventListener("change", renderPairs);
     deleteAllPerfectBtn.addEventListener("click", deleteAllPerfect);
+    deleteSelectedBtn.addEventListener("click", deleteSelected);
+    selectAllVisibleCheckbox.addEventListener("change", (e) => {
+      const visiblePairs = allPairs.filter(passesFilter);
+      const shouldSelect = e.target.checked;
+      container.querySelectorAll(".doc-checkbox").forEach((cb) => {
+        const id = parseInt(cb.getAttribute("data-doc-id"), 10);
+        cb.checked = shouldSelect;
+        if (shouldSelect) {
+          selectedDocIds.add(id);
+        } else {
+          selectedDocIds.delete(id);
+        }
+      });
+    });
     loadPairs();
   </script>
 </body>
