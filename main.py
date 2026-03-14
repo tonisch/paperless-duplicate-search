@@ -183,7 +183,7 @@ def build_preview_path(doc_id: int) -> str:
 
 
 def _metadata_penalty(pair: Dict[str, Any]) -> float:
-    """Abzug in Prozentpunkten (0–12), wenn Paperless-Felder (Titel, Korrespondent, Tags, Belegdatum) sich unterscheiden."""
+    """Abzug in Prozentpunkten: Titel/Korrespondent/Tags je 3 %, Belegdatum 20 % bei Abweichung."""
     a, b = pair["a"], pair["b"]
     same_title = ((a.get("title") or "").strip() == (b.get("title") or "").strip())
     c_a = a.get("correspondent") or {}
@@ -193,8 +193,8 @@ def _metadata_penalty(pair: Dict[str, Any]) -> float:
     ids_b = {t.get("id") for t in (b.get("tags") or []) if t.get("id") is not None}
     same_tags = ids_a == ids_b
     same_date = (a.get("created") or "") == (b.get("created") or "")
-    same_count = sum([same_title, same_correspondent, same_tags, same_date])
-    return (4 - same_count) * 3.0  # 3 % pro abweichendem Feld, max 12 %
+    penalty = (0.0 if same_title else 3.0) + (0.0 if same_correspondent else 3.0) + (0.0 if same_tags else 3.0) + (0.0 if same_date else 20.0)
+    return penalty
 
 
 def _apply_metadata_to_similarity(pairs: List[Dict[str, Any]]) -> None:
