@@ -58,6 +58,24 @@ async def ping():
     return {"ok": True}
 
 
+@app.get("/api/paperless-check")
+async def paperless_check():
+    """Prüft, ob Paperless vom Container aus erreichbar ist (kurzer Timeout)."""
+    try:
+        async with httpx.AsyncClient(
+            base_url=PAPERLESS_URL,
+            headers=HEADERS,
+            timeout=10.0,
+            follow_redirects=True,
+        ) as client:
+            resp = await client.get("/api/documents/?page_size=1")
+            resp.raise_for_status()
+        return {"ok": True, "message": "Paperless erreichbar"}
+    except Exception as e:
+        log.warning("Paperless check failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
 async def fetch_all_documents() -> List[Dict[str, Any]]:
     docs: List[Dict[str, Any]] = []
     log.info("Fetching documents from Paperless...")

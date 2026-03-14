@@ -608,9 +608,18 @@
         if (pingResp && pingResp.ok) {
           appendLog(currentLang === "de" ? "Server erreichbar." : "Server reachable.");
         } else {
-          appendLog(currentLang === "de" ? "Server nicht erreichbar oder Timeout – versuche trotzdem." : "Server unreachable or timeout – trying anyway.");
+          appendLog(currentLang === "de" ? "Server nicht erreichbar oder Timeout." : "Server unreachable or timeout.");
         }
-        appendLog(currentLang === "de" ? "Starte Duplikat-Suche (Polling)…" : "Starting duplicate search (polling)…");
+        updateProgress(0, null, currentLang === "de" ? "Prüfe Paperless…" : "Checking Paperless…");
+        const checkResp = await fetch("/api/paperless-check").catch(() => null);
+        const checkData = checkResp && checkResp.ok ? await checkResp.json().catch(() => ({})) : {};
+        if (checkData.ok) {
+          appendLog(currentLang === "de" ? "Paperless erreichbar." : "Paperless reachable.");
+        } else {
+          appendLog((currentLang === "de" ? "Paperless nicht erreichbar: " : "Paperless unreachable: ") + (checkData.error || "?"));
+          showToast((currentLang === "de" ? "Paperless nicht erreichbar. Prüfe PAPERLESS_URL und Netzwerk auf dem Server." : "Paperless unreachable. Check PAPERLESS_URL and network on server."), "error");
+        }
+        appendLog(currentLang === "de" ? "Starte Duplikat-Suche…" : "Starting duplicate search…");
         updateProgress(0, null, currentLang === "de" ? "Starte Duplikat-Suche…" : "Starting duplicate search…");
         await loadPairsViaPolling();
       } catch (err) {
