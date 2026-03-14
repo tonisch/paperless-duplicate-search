@@ -1,13 +1,13 @@
 ---
-description: Nach Änderungen immer commit und push ausführen
+description: Nach Code-Änderungen commit + push; nach Push Server per SSH aktualisieren
 alwaysApply: true
 ---
 
-# Commit und Push nach Änderungen
+# Auto-Commit und Server-Update
 
-Nach jeder Änderung am Projekt:
-
-1. **Commit**: Alle geänderten Dateien stagen und mit aussagekräftiger Message committen (z. B. auf Deutsch, wenn der Nutzer auf Deutsch schreibt).
-2. **Push**: Den aktuellen Branch zu `origin` pushen.
-
-So kann der Nutzer den Server direkt aktualisieren. Commit- und Push-Schritte nicht vergessen und nicht nur vorschlagen – tatsächlich ausführen.
+- **Nach Code-Änderungen:** Alle geänderten Dateien stagen, mit aussagekräftiger Message committen (z. B. auf Deutsch) und zu `origin` pushen.
+- **Nach einem Push:** Server aktualisieren mit:
+  ```bash
+  ssh nancy "cd ~/paperless-duplicate-search && git pull && docker-compose down && docker-compose up -d --build"
+  ```
+  App-URL: http://10.23.42.21:8023

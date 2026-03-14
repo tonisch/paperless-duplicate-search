@@ -598,6 +598,7 @@
       const logEl = document.getElementById("loadLog");
       logEl.textContent = "";
       appendLog(currentLang === "de" ? "Starte Abfrage…" : "Starting request…");
+      updateProgress(0, null, currentLang === "de" ? "Starte Abfrage…" : "Starting request…");
 
       try {
         const pingController = new AbortController();
@@ -607,105 +608,11 @@
         if (pingResp && pingResp.ok) {
           appendLog(currentLang === "de" ? "Server erreichbar." : "Server reachable.");
         } else {
-          appendLog(currentLang === "de" ? "Server nicht erreichbar oder Timeout – prüfe URL und Netzwerk." : "Server unreachable or timeout – check URL and network.");
+          appendLog(currentLang === "de" ? "Server nicht erreichbar oder Timeout – versuche trotzdem." : "Server unreachable or timeout – trying anyway.");
         }
-        appendLog(currentLang === "de" ? "Rufe Duplikat-Suche auf…" : "Calling duplicate search…");
-
-        const streamTimeoutMs = 8000;
-        let streamAborted = false;
-        const ac = new AbortController();
-        const timeoutId = setTimeout(() => {
-          if (!streamAborted) {
-            streamAborted = true;
-            ac.abort();
-          }
-        }, streamTimeoutMs);
-
-        let resultData = null;
-        let errorMessage = null;
-        let gotAnyProgress = false;
-
-        try {
-          const resp = await fetch("/api/duplicates", { signal: ac.signal });
-          clearTimeout(timeoutId);
-          if (!resp.ok) {
-            throw new Error("HTTP " + resp.status);
-          }
-          const reader = resp.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = "";
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed) continue;
-              try {
-                const obj = JSON.parse(trimmed);
-                if (obj.event === "progress") {
-                  gotAnyProgress = true;
-                  updateProgress(obj.current ?? 0, obj.total ?? null, obj.message ?? "");
-                } else if (obj.event === "result") {
-                  resultData = obj.data;
-                } else if (obj.event === "error") {
-                  errorMessage = obj.message || (currentLang === "de" ? "Unbekannter Fehler" : "Unknown error");
-                }
-              } catch (e) {
-                console.warn("Parse line:", trimmed, e);
-              }
-            }
-          }
-          if (buffer.trim()) {
-            try {
-              const obj = JSON.parse(buffer.trim());
-              if (obj.event === "result") resultData = obj.data;
-              else if (obj.event === "error") errorMessage = obj.message;
-            } catch (_) {}
-          }
-        } catch (streamErr) {
-          clearTimeout(timeoutId);
-          if (streamErr.name === "AbortError" && !gotAnyProgress) {
-            appendLog(currentLang === "de" ? "Keine Streaming-Antwort in 8s – wechsle zu Polling (funktioniert hinter Proxy)." : "No stream response in 8s – switching to polling (works behind proxy).");
-            await loadPairsViaPolling();
-            return;
-          }
-          if (!resultData && !errorMessage) throw streamErr;
-        }
-
-        if (errorMessage) {
-          showProgress(false);
-          statusEl.textContent = t().errorLoadDuplicates + ": " + errorMessage;
-          appendLog("FEHLER: " + errorMessage);
-          showToast(t().errorLoadDuplicates + ": " + errorMessage, "error");
-          return;
-        }
-        if (resultData) {
-          if (!resultData.pairs || resultData.pairs.length === 0) {
-            showProgress(false);
-            statusEl.textContent = t().noneFound;
-            allPairs = [];
-            updateChart({});
-            renderPairs();
-            return;
-          }
-          updateProgress(1, 1, currentLang === "de" ? "Fertig." : "Done.");
-          showProgress(false);
-          const total = resultData.total_pairs ?? resultData.pairs.length;
-          const counts = resultData.similarity_counts || {};
-          const count100 = counts["100"] || counts[100] || 0;
-          statusEl.textContent = t().statusSummary(total, count100);
-          allPairs = resultData.pairs;
-          updateChart(counts);
-          renderPairs();
-          return;
-        }
-
-        showProgress(false);
-        statusEl.textContent = t().errorLoadDuplicates + " (keine Daten)";
-        showToast(t().errorLoadDuplicates + " (keine Daten)", "error");
+        appendLog(currentLang === "de" ? "Starte Duplikat-Suche (Polling)…" : "Starting duplicate search (polling)…");
+        updateProgress(0, null, currentLang === "de" ? "Starte Duplikat-Suche…" : "Starting duplicate search…");
+        await loadPairsViaPolling();
       } catch (err) {
         console.error(err);
         showProgress(false);
