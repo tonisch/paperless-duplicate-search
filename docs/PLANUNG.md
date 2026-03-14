@@ -28,6 +28,15 @@
 
 ---
 
+### Bereits umgesetzt (UX-Verbesserungen)
+
+- **Unterschiede sichtbar:** Pro Paar ein Block „Unterschiede in Paperless“ – Titel, Korrespondent, Tags links vs. rechts; abweichende Werte farblich hervorgehoben (amber).
+- **Ähnlichkeit als Entscheidungshilfe:** Großer farbiger Badge (100 % = grün, 95–99 % = amber, darunter = orange) mit Tooltip „Je höher, desto sicherer die Duplikat-Erkennung“.
+- **PDF-Vorschau für Entscheidung:** Label „Vorschau für Entscheidung (PDF)“ über den beiden Previews; Iframes unverändert.
+- **Fortschritt beim Löschen:** Beim „Ausgewählte löschen“ Einzellöschung nacheinander mit Fortschrittsbalken am unteren Rand („Lösche Dokument 2 von 5…“, Balken, „2/5“).
+
+---
+
 ## 3. Ideen für bessere UX
 
 ### 3.1 Erster Eindruck: Zusammenfassung

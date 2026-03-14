@@ -66,6 +66,17 @@
   <!-- Toast-Container für Meldungen (statt alert) -->
   <div id="toastContainer" class="fixed bottom-4 left-4 right-4 md:left-auto md:right-4 md:max-w-sm flex flex-col gap-2" role="status" aria-live="polite"></div>
 
+  <!-- Fortschritt beim Löschen mehrerer Dokumente (Hintergrund) -->
+  <div id="deleteProgressBar" class="fixed bottom-0 left-0 right-0 hidden bg-slate-800 border-t border-slate-600 px-4 py-2 z-40">
+    <div class="max-w-2xl mx-auto flex items-center gap-3">
+      <span id="deleteProgressText" class="text-sm text-slate-300 whitespace-nowrap">Lösche…</span>
+      <div class="flex-1 h-2 bg-slate-700 rounded-full overflow-hidden">
+        <div id="deleteProgressFill" class="h-full bg-emerald-500 transition-all duration-200" style="width: 0%"></div>
+      </div>
+      <span id="deleteProgressCount" class="text-xs text-slate-400 tabular-nums">0/0</span>
+    </div>
+  </div>
+
   <div id="mainContent" class="max-w-6xl mx-auto py-8 px-4">
     <header class="mb-8 flex flex-wrap items-center justify-between gap-4">
       <div>
@@ -323,6 +334,22 @@
       return names.join(", ");
     }
 
+    function similarityBadgeClass(sim) {
+      if (sim >= 100) return "bg-emerald-600 text-white";
+      if (sim >= 95) return "bg-amber-500/90 text-slate-900";
+      return "bg-orange-500/90 text-slate-900";
+    }
+
+    function diffClass(same) {
+      return same ? "" : "text-amber-300 bg-amber-900/30";
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement("div");
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
     function renderPairs() {
       container.innerHTML = "";
       const visiblePairs = allPairs.filter(passesFilter);
@@ -349,12 +376,21 @@
         const header = document.createElement("div");
         header.className = "flex flex-wrap items-center justify-between mb-4 gap-2";
 
+        const sim = pair.similarity;
+        const titleA = (pair.a.title || "").trim();
+        const titleB = (pair.b.title || "").trim();
+        const corrA = formatCorrespondent(pair.a.correspondent);
+        const corrB = formatCorrespondent(pair.b.correspondent);
+        const tagsA = formatTags(pair.a.tags);
+        const tagsB = formatTags(pair.b.tags);
+        const titleSame = titleA === titleB;
+        const corrSame = corrA === corrB;
+        const tagsSame = tagsA === tagsB;
         const leftInfo = document.createElement("div");
         leftInfo.innerHTML = `
           <div class="text-xs uppercase tracking-wide text-slate-400">${pair.reason}</div>
-          <div class="text-lg font-semibold mt-1">
-            ${currentLang === "de" ? "Ähnlichkeit" : "Similarity"}:
-            <span class="text-emerald-400">${pair.similarity.toFixed(1)}%</span>
+          <div class="mt-1 inline-block px-3 py-1 rounded-lg text-lg font-bold ${similarityBadgeClass(sim)}" title="${currentLang === "de" ? "Je höher, desto sicherer die Duplikat-Erkennung" : "Higher = more confident duplicate"}">
+            ${sim.toFixed(1)}%
           </div>
         `;
 
@@ -381,30 +417,40 @@
         header.appendChild(leftInfo);
         header.appendChild(rightInfo);
 
+        const diffSection = document.createElement("div");
+        diffSection.className = "mb-4 p-3 bg-slate-800/50 border border-slate-700 rounded-lg";
+        diffSection.innerHTML = `
+          <div class="text-xs font-semibold text-slate-400 mb-2">${currentLang === "de" ? "Unterschiede in Paperless (Titel, Korrespondent, Tags)" : "Differences in Paperless (title, correspondent, tags)"}</div>
+          <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+            <div class="text-slate-500">${currentLang === "de" ? "Links (ID " : "Left (ID "}${aId})</div>
+            <div class="text-slate-500">${currentLang === "de" ? "Rechts (ID " : "Right (ID "}${bId})</div>
+            <div class="break-words ${diffClass(titleSame)}">${escapeHtml(titleA || (currentLang === "de" ? "(kein Titel)" : "(no title)"))}</div>
+            <div class="break-words ${diffClass(titleSame)}">${escapeHtml(titleB || (currentLang === "de" ? "(kein Titel)" : "(no title)"))}</div>
+            <div class="break-words ${diffClass(corrSame)}">${escapeHtml(corrA)}</div>
+            <div class="break-words ${diffClass(corrSame)}">${escapeHtml(corrB)}</div>
+            <div class="break-words ${diffClass(tagsSame)}">${escapeHtml(tagsA)}</div>
+            <div class="break-words ${diffClass(tagsSame)}">${escapeHtml(tagsB)}</div>
+          </div>
+        `;
+        card.appendChild(header);
+        card.appendChild(diffSection);
+
+        const previewLabel = currentLang === "de" ? "Vorschau für Entscheidung (PDF)" : "Preview for decision (PDF)";
         const previewWrapper = document.createElement("div");
         previewWrapper.className = "grid grid-cols-1 md:grid-cols-2 gap-4 mb-4";
-
+        previewWrapper.innerHTML = `<div class="col-span-2 text-xs text-slate-500 font-medium">${previewLabel}</div>`;
         const leftCol = document.createElement("div");
         leftCol.innerHTML = `
-          <div class="flex items-center justify-between gap-2 mb-1">
-            <div class="text-sm font-medium truncate">${pair.a.title || (currentLang === "de" ? "(kein Titel)" : "(no title)")}</div>
-          </div>
-          <div class="text-xs text-slate-400 mb-1">ID ${aId}</div>
-          <div class="text-xs text-slate-400 mb-1">${currentLang === "de" ? "Korrespondent" : "Correspondent"}: ${formatCorrespondent(pair.a.correspondent)}</div>
-          <div class="text-xs text-slate-400 mb-2">Tags: ${formatTags(pair.a.tags)}</div>
+          <div class="text-sm font-medium truncate mb-1">${escapeHtml(pair.a.title || (currentLang === "de" ? "(kein Titel)" : "(no title)"))}</div>
+          <div class="text-xs text-slate-400 mb-2">ID ${aId}</div>
           <div class="bg-slate-950/80 border border-slate-700 rounded-lg overflow-hidden flex items-center justify-center min-h-[14rem]">
             <iframe src="${pair.a.preview_url}" class="w-full h-full min-h-[14rem] scale-75 origin-top" loading="lazy" title="Preview ${aId}"></iframe>
           </div>
         `;
-
         const rightCol = document.createElement("div");
         rightCol.innerHTML = `
-          <div class="flex items-center justify-between gap-2 mb-1">
-            <div class="text-sm font-medium truncate">${pair.b.title || (currentLang === "de" ? "(kein Titel)" : "(no title)")}</div>
-          </div>
-          <div class="text-xs text-slate-400 mb-1">ID ${bId}</div>
-          <div class="text-xs text-slate-400 mb-1">${currentLang === "de" ? "Korrespondent" : "Correspondent"}: ${formatCorrespondent(pair.b.correspondent)}</div>
-          <div class="text-xs text-slate-400 mb-2">Tags: ${formatTags(pair.b.tags)}</div>
+          <div class="text-sm font-medium truncate mb-1">${escapeHtml(pair.b.title || (currentLang === "de" ? "(kein Titel)" : "(no title)"))}</div>
+          <div class="text-xs text-slate-400 mb-2">ID ${bId}</div>
           <div class="bg-slate-950/80 border border-slate-700 rounded-lg overflow-hidden flex items-center justify-center min-h-[14rem]">
             <iframe src="${pair.b.preview_url}" class="w-full h-full min-h-[14rem] scale-75 origin-top" loading="lazy" title="Preview ${bId}"></iframe>
           </div>
@@ -453,7 +499,6 @@
         actions.appendChild(keepBDeleteA);
         actions.appendChild(skipBtn);
 
-        card.appendChild(header);
         card.appendChild(previewWrapper);
         card.appendChild(actions);
 
@@ -727,6 +772,23 @@
       }
     }
 
+    function showDeleteProgress(show, current, total, text) {
+      const bar = document.getElementById("deleteProgressBar");
+      const fill = document.getElementById("deleteProgressFill");
+      const countEl = document.getElementById("deleteProgressCount");
+      const textEl = document.getElementById("deleteProgressText");
+      if (!bar) return;
+      if (show) {
+        bar.classList.remove("hidden");
+        const pct = total ? Math.round((100 * current) / total) : 0;
+        if (fill) fill.style.width = pct + "%";
+        if (countEl) countEl.textContent = total ? current + "/" + total : "";
+        if (textEl) textEl.textContent = text || (currentLang === "de" ? "Lösche…" : "Deleting…");
+      } else {
+        bar.classList.add("hidden");
+      }
+    }
+
     async function deleteSelected() {
       const removeIds = [];
       for (const [pairKey, action] of selectedPairs) {
@@ -740,22 +802,33 @@
       if (!confirm(t().confirmDeleteSelected(removeIds.length))) {
         return;
       }
+      const total = removeIds.length;
       try {
         deleteSelectedBtn.disabled = true;
         deleteSelectedBtn.textContent =
-          currentLang === "de" ? "Lösche Auswahl…" : "Deleting selection…";
-        const resp = await fetch("/api/bulk-delete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ids: removeIds }),
-        });
-        if (!resp.ok) {
-          const text = await resp.text();
-          showToast(`${t().errorBulkDelete}: ${text}`, "error");
-          return;
+          currentLang === "de" ? "Lösche…" : "Deleting…";
+        showDeleteProgress(true, 0, total, currentLang === "de" ? "Lösche Dokumente…" : "Deleting documents…");
+        const deleted = [];
+        for (let i = 0; i < removeIds.length; i++) {
+          const id = removeIds[i];
+          showDeleteProgress(true, i, total, currentLang === "de" ? "Lösche Dokument " + (i + 1) + " von " + total + "…" : "Deleting document " + (i + 1) + " of " + total + "…");
+          try {
+            const resp = await fetch("/api/delete-one", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id }),
+            });
+            if (resp.ok) deleted.push(id);
+            else showToast("ID " + id + ": " + (await resp.text()), "error");
+          } catch (e) {
+            showToast("ID " + id + ": " + (e.message || e), "error");
+          }
+          const fillEl = document.getElementById("deleteProgressFill");
+          const countEl2 = document.getElementById("deleteProgressCount");
+          if (fillEl) fillEl.style.width = (Math.round((100 * (i + 1)) / total)) + "%";
+          if (countEl2) countEl2.textContent = (i + 1) + "/" + total;
         }
-        const data = await resp.json();
-        const deleted = data.deleted_ids || removeIds;
+        showDeleteProgress(false);
         deleted.forEach((id) => {
           for (const [pairKey, action] of selectedPairs.entries()) {
             const [aId, bId] = pairKey.split("-").map(Number);
@@ -769,6 +842,7 @@
         await loadPairs();
       } catch (err) {
         console.error(err);
+        showDeleteProgress(false);
         showToast(`${t().errorBulkDelete}: ${err.message || err}`, "error");
       } finally {
         deleteSelectedBtn.disabled = false;

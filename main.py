@@ -489,6 +489,28 @@ async def delete_document(body: Dict[str, Any]):
     return JSONResponse({"status": "ok", "deleted_id": remove_id})
 
 
+@app.post("/api/delete-one")
+async def delete_one_document(body: Dict[str, Any]):
+    """Löscht ein einzelnes Dokument (für Fortschritts-Anzeige bei Mehrfachlöschung)."""
+    doc_id = body.get("id")
+    if not doc_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="id ist Pflicht",
+        )
+    doc_id = int(doc_id)
+    async with httpx.AsyncClient(
+        base_url=PAPERLESS_URL,
+        headers=HEADERS,
+        timeout=60.0,
+        follow_redirects=True,
+    ) as client:
+        resp = await client.delete(f"/api/documents/{doc_id}/")
+        if resp.status_code not in (204, 200, 404):
+            raise HTTPException(status_code=resp.status_code, detail=f"Fehler beim Löschen: {resp.text}")
+    return JSONResponse({"status": "ok", "deleted_id": doc_id})
+
+
 @app.post("/api/bulk-delete")
 async def bulk_delete(body: Dict[str, Any]):
     """
