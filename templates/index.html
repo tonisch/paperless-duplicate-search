@@ -489,10 +489,10 @@
         });
       }
 
-      const visiblePairs = allPairs.filter(passesFilter);
+      const visible = allPairs.filter(passesFilter);
       selectAllVisibleCheckbox.checked =
-        visiblePairs.length > 0 &&
-        visiblePairs.every((p) => selectedPairs.has(`${p.a.id}-${p.b.id}`));
+        visible.length > 0 &&
+        visible.every((p) => selectedPairs.has(`${p.a.id}-${p.b.id}`));
     }
 
     function updateChart(similarityCounts) {
