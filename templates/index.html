@@ -327,6 +327,28 @@
       return allPairs.filter(passesFilter).length;
     }
 
+    /** Ähnlichkeits-Verteilung aus allPairs (für Diagramm/Status ohne Neuladen). */
+    function getSimilarityCounts() {
+      const counts = {};
+      for (let pct = 80; pct <= 100; pct++) counts[pct] = 0;
+      allPairs.forEach((p) => {
+        const s = Math.round(p.similarity);
+        if (s >= 80 && s <= 100) counts[s] = (counts[s] || 0) + 1;
+      });
+      return counts;
+    }
+
+    /** Chart + Filter-Zusammenfassung + Status + Kartenliste aus aktuellem allPairs aktualisieren (ohne Neuladen). */
+    function refreshChartAndFilter() {
+      const counts = getSimilarityCounts();
+      updateChart(counts, filterSelect.value || "exact_100");
+      updateFilterSummary();
+      const total = allPairs.length;
+      const count100 = counts[100] || 0;
+      statusEl.textContent = total ? t().statusSummary(total, count100) : t().noneFound;
+      renderPairs();
+    }
+
     function buildFilterDropdown() {
       const exactGroup = document.getElementById("filterOptgroupExact");
       const geGroup = document.getElementById("filterOptgroupGe");
@@ -354,12 +376,15 @@
     function updateFilterSummary() {
       const el = document.getElementById("filterCurrentSummary");
       if (!el) return;
-      const n = getFilteredCount();
+      const pairCount = getFilteredCount();
+      const docCount = pairCount * 2;
       const v = filterSelect.value || "exact_100";
       let label = "";
       if (v.startsWith("exact_")) label = (currentLang === "de" ? "Genau " : "Exactly ") + v.replace("exact_", "") + " %";
       else if (v.startsWith("ge_")) label = "≥ " + v.replace("ge_", "") + " %";
-      el.textContent = n + " " + (currentLang === "de" ? "Paare" : "pairs") + " (" + label + ")";
+      const pairLabel = currentLang === "de" ? "Paare" : "pairs";
+      const docLabel = currentLang === "de" ? "Dokumente" : "documents";
+      el.textContent = pairCount + " " + pairLabel + " (" + docCount + " " + docLabel + ") · " + label;
     }
 
     function formatCorrespondent(c) {
@@ -615,7 +640,20 @@
         visible.every((p) => selectedPairs.has(`${p.a.id}-${p.b.id}`));
     }
 
-    function updateChart(similarityCounts) {
+    function barActiveForFilter(pct, filterValue) {
+      if (!filterValue) return true;
+      if (filterValue.startsWith("exact_")) {
+        const n = parseInt(filterValue.replace("exact_", ""), 10);
+        return pct === n;
+      }
+      if (filterValue.startsWith("ge_")) {
+        const n = parseInt(filterValue.replace("ge_", ""), 10);
+        return pct >= n;
+      }
+      return true;
+    }
+
+    function updateChart(similarityCounts, filterValue) {
       const ctx = document.getElementById("similarityChart").getContext("2d");
       const counts = similarityCounts || {};
       const labels = [];
@@ -624,6 +662,20 @@
         labels.push(pct + "%");
         values.push(counts[pct] || counts["" + pct] || 0);
       }
+
+      const baseColors = labels.map((_, i) => {
+        const pct = 80 + i;
+        if (pct === 100) return "rgba(16, 185, 129, 0.8)";
+        if (pct >= 95) return "rgba(245, 158, 11, 0.6)";
+        return "rgba(148, 163, 184, 0.5)";
+      });
+      const backgroundColor = labels.map((_, i) => {
+        const pct = 80 + i;
+        const active = barActiveForFilter(pct, filterValue || "exact_100");
+        const base = baseColors[i];
+        if (active) return base;
+        return base.replace(/,\s*[\d.]+\)$/, ", 0.2)");
+      });
 
       if (similarityChart) {
         similarityChart.destroy();
@@ -637,12 +689,7 @@
             {
               label: t().chartLabel,
               data: values,
-              backgroundColor: labels.map((_, i) => {
-                const pct = 80 + i;
-                if (pct === 100) return "rgba(16, 185, 129, 0.8)";
-                if (pct >= 95) return "rgba(245, 158, 11, 0.6)";
-                return "rgba(148, 163, 184, 0.5)";
-              }),
+              backgroundColor,
             },
           ],
         },
@@ -653,8 +700,7 @@
             const idx = elements[0].index;
             const pct = 80 + idx;
             filterSelect.value = "exact_" + pct;
-            updateFilterSummary();
-            renderPairs();
+            refreshChartAndFilter();
           },
           plugins: {
             legend: { display: false },
@@ -804,19 +850,11 @@
                 updateProgress(1, 1, currentLang === "de" ? "Fertig." : "Done.");
                 showProgress(false);
                 if (resultData.pairs && resultData.pairs.length > 0) {
-                  const total = resultData.total_pairs ?? resultData.pairs.length;
-                  const counts = resultData.similarity_counts || {};
-                  const count100 = counts["100"] || counts[100] || 0;
-                  statusEl.textContent = t().statusSummary(total, count100);
                   allPairs = resultData.pairs;
-                  updateChart(counts);
-                  renderPairs();
-                  updateFilterSummary();
+                  refreshChartAndFilter();
                 } else {
-                  statusEl.textContent = t().noneFound;
                   allPairs = [];
-                  updateChart({});
-                  renderPairs();
+                  refreshChartAndFilter();
                 }
                 return true;
               }
@@ -861,6 +899,8 @@
         }
         selectedPairs.delete(`${keepId}-${removeId}`);
         selectedPairs.delete(`${removeId}-${keepId}`);
+        allPairs = allPairs.filter((p) => p.a.id !== removeId && p.b.id !== removeId);
+        refreshChartAndFilter();
         cardElement.remove();
       } catch (err) {
         console.error(err);
@@ -925,6 +965,7 @@
           if (countEl2) countEl2.textContent = (i + 1) + "/" + total;
         }
         showDeleteProgress(false);
+        const deletedSet = new Set(deleted);
         deleted.forEach((id) => {
           for (const [pairKey, action] of selectedPairs.entries()) {
             const [aId, bId] = pairKey.split("-").map(Number);
@@ -934,8 +975,9 @@
             }
           }
         });
+        allPairs = allPairs.filter((p) => !deletedSet.has(p.a.id) && !deletedSet.has(p.b.id));
+        refreshChartAndFilter();
         showToast(currentLang === "de" ? `${deleted.length} Dokument(e) gelöscht.` : `${deleted.length} document(s) deleted.`, "info");
-        await loadPairs();
       } catch (err) {
         console.error(err);
         showDeleteProgress(false);
@@ -1018,6 +1060,7 @@
     // Event-Listener
     reloadBtn.addEventListener("click", loadPairs);
     filterSelect.addEventListener("change", () => {
+      updateChart(getSimilarityCounts(), filterSelect.value);
       updateFilterSummary();
       renderPairs();
     });
