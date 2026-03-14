@@ -4,79 +4,127 @@
   <meta charset="UTF-8" />
   <title>Paperless Duplikate</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --surface-hover: #334155;
+      --border: #334155;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --accent: #10b981;
+      --accent-hover: #34d399;
+      --danger: #ef4444;
+      --danger-hover: #f87171;
+      --radius: 12px;
+      --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.2), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    }
+    body { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+    .app-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+    .btn-primary { background: var(--accent); color: #022c22; font-weight: 600; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-danger { background: var(--danger); color: white; }
+    .btn-danger:hover { background: var(--danger-hover); }
+    #loadingOverlay { transition: opacity 0.2s ease; }
+    #loadingOverlay.hidden { pointer-events: none; opacity: 0; }
+    .spinner { width: 40px; height: 40px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #toastContainer { z-index: 9999; }
+    .toast { animation: toastIn 0.25s ease; }
+    @keyframes toastIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen">
-  <div class="max-w-6xl mx-auto py-8 px-4">
-    <header class="mb-8 flex items-center justify-between gap-4">
+<body>
+  <!-- Loading Overlay: immer sichtbar während des Ladens -->
+  <div id="loadingOverlay" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/95 backdrop-blur-sm">
+    <div class="w-full max-w-lg mx-4 app-card p-6">
+      <div class="flex flex-col items-center gap-4">
+        <div class="spinner" aria-hidden="true"></div>
+        <p id="loadingTitle" class="text-lg font-semibold text-slate-100">Lade Duplikate…</p>
+        <div class="w-full">
+          <div class="flex items-center justify-between text-sm text-slate-400 mb-1">
+            <span id="loadingPhase">Verbindung wird hergestellt…</span>
+            <span id="progressPercent">0%</span>
+          </div>
+          <div class="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
+            <div id="progressBar" class="h-full bg-emerald-500 transition-all duration-300" style="width: 0%"></div>
+          </div>
+        </div>
+        <details class="w-full" open>
+          <summary class="cursor-pointer text-sm text-slate-500 hover:text-slate-400 select-none">Log</summary>
+          <pre id="loadLog" class="mt-2 p-3 bg-slate-900/80 border border-slate-700 rounded-lg text-xs text-slate-400 font-mono max-h-40 overflow-auto whitespace-pre-wrap"></pre>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast-Container für Meldungen (statt alert) -->
+  <div id="toastContainer" class="fixed bottom-4 left-4 right-4 md:left-auto md:right-4 md:max-w-sm flex flex-col gap-2" role="status" aria-live="polite"></div>
+
+  <div id="mainContent" class="max-w-6xl mx-auto py-8 px-4">
+    <header class="mb-8 flex flex-wrap items-center justify-between gap-4">
       <div>
-        <h1 id="title" class="text-3xl font-bold tracking-tight">Paperless Duplikate</h1>
-        <p id="subtitle" class="text-slate-400 mt-1">
+        <h1 id="title" class="text-3xl font-bold tracking-tight text-slate-100">Paperless Duplikate</h1>
+        <p id="subtitle" class="text-slate-400 mt-1 text-sm">
           Finde und bestätige Duplikate mit Vorschau, bevor du sie löschst.
         </p>
       </div>
       <div class="flex items-center gap-3">
-        <select id="languageSelect" class="bg-slate-900 border border-slate-700 text-slate-100 text-xs rounded px-2 py-1">
+        <select id="languageSelect" class="app-card border-slate-600 text-slate-100 text-sm rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500/50 focus:outline-none">
           <option value="auto">🌐 Auto</option>
           <option value="de">Deutsch</option>
           <option value="en">English</option>
         </select>
-        <button id="reloadBtn" class="px-4 py-2 rounded-md bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-semibold text-sm">
+        <button id="reloadBtn" class="btn-primary px-4 py-2 rounded-lg text-sm">
           Neu laden
         </button>
       </div>
     </header>
 
-    <div id="status" class="mb-2 text-sm text-slate-300">Lade Duplikate...</div>
-    <div id="progressSection" class="mb-3 hidden">
-      <div class="flex items-center gap-2 mb-1">
-        <div class="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden">
-          <div id="progressBar" class="h-full bg-emerald-500 transition-all duration-300" style="width: 0%"></div>
-        </div>
-        <span id="progressPercent" class="text-xs text-slate-400 w-10">0%</span>
-      </div>
-      <details class="mt-1" open>
-        <summary class="cursor-pointer text-xs text-slate-500 hover:text-slate-400">Log</summary>
-        <pre id="loadLog" class="mt-1 p-2 bg-slate-900/80 border border-slate-800 rounded text-xs text-slate-400 font-mono max-h-32 overflow-auto whitespace-pre-wrap"></pre>
-      </details>
-    </div>
+    <div id="status" class="mb-4 text-sm text-slate-400"></div>
 
-    <div class="flex flex-wrap items-center gap-3 mb-2">
-      <div class="text-xs text-slate-400 flex items-center gap-2">
-        <span id="filterLabel">Filter:</span>
-        <select id="similarityFilter" class="bg-slate-900 border border-slate-700 text-slate-100 text-xs rounded px-2 py-1">
-          <option value="all" data-i18n="filter_all">Alle</option>
-          <option value="100" data-i18n="filter_100">Nur 100%</option>
-          <option value="ge95" data-i18n="filter_ge95">≥ 95%</option>
-          <option value="ge90" data-i18n="filter_ge90">≥ 90%</option>
-        </select>
+    <div class="app-card p-4 mb-6">
+      <div class="flex flex-wrap items-center gap-4">
+        <div class="flex items-center gap-2">
+          <span id="filterLabel" class="text-sm text-slate-400">Filter:</span>
+          <select id="similarityFilter" class="app-card border-slate-600 text-slate-100 text-sm rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500/50 focus:outline-none">
+            <option value="all" data-i18n="filter_all">Alle</option>
+            <option value="100" data-i18n="filter_100">Nur 100%</option>
+            <option value="ge95" data-i18n="filter_ge95">≥ 95%</option>
+            <option value="ge90" data-i18n="filter_ge90">≥ 90%</option>
+          </select>
+        </div>
+        <label class="flex items-center gap-2 text-sm text-slate-400 cursor-pointer">
+          <input type="checkbox" id="selectAllVisible" class="rounded border-slate-600 bg-slate-800 text-emerald-500 focus:ring-emerald-500" />
+          <span id="selectAllVisibleLabel">Alle sichtbaren auswählen</span>
+        </label>
+        <button id="deleteSelectedBtn" class="btn-danger px-3 py-2 rounded-lg text-sm font-semibold">
+          Ausgewählte löschen
+        </button>
+        <button id="deleteAllPerfectBtn" class="px-3 py-2 rounded-lg text-sm font-semibold bg-red-800 hover:bg-red-700 text-white">
+          Alle 100%-Duplikate bereinigen
+        </button>
       </div>
-      <label class="flex items-center gap-1 text-xs text-slate-400">
-        <input type="checkbox" id="selectAllVisible" class="rounded border-slate-600 bg-slate-900" />
-        <span id="selectAllVisibleLabel">Alle sichtbaren auswählen</span>
-      </label>
-      <button id="deleteSelectedBtn" class="px-3 py-1.5 rounded-md bg-red-500/90 hover:bg-red-400 text-xs font-semibold text-slate-900">
-        Ausgewählte löschen
-      </button>
-      <button id="deleteAllPerfectBtn" class="px-3 py-1.5 rounded-md bg-red-700/90 hover:bg-red-600 text-xs font-semibold text-slate-50">
-        Alle 100%-Duplikate bereinigen
-      </button>
     </div>
 
     <section class="mb-6">
-      <details id="statsSection" class="group" open>
-        <summary class="cursor-pointer list-none flex items-center gap-2 text-sm font-semibold text-slate-200 mb-2 select-none hover:text-slate-100">
+      <details id="statsSection" class="group app-card overflow-hidden" open>
+        <summary class="cursor-pointer list-none flex items-center justify-between px-4 py-3 text-sm font-semibold text-slate-200 hover:bg-slate-800/50 select-none">
           <span id="statsTitle">Statistik</span>
           <span class="text-slate-500 text-xs transition-transform inline-block group-open:rotate-90">▶</span>
         </summary>
-        <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-3">
+        <div class="p-4 border-t border-slate-700">
           <canvas id="similarityChart" class="w-full h-40"></canvas>
         </div>
       </details>
     </section>
 
-    <div id="pairsContainer" class="space-y-4"></div>
+    <div id="pairsContainer" class="space-y-6"></div>
   </div>
 
   <script>
@@ -208,6 +256,8 @@
         t.deleteSelected;
       document.getElementById("deleteAllPerfectBtn").textContent =
         t.deleteAllPerfect;
+      const loadingTitleEl = document.getElementById("loadingTitle");
+      if (loadingTitleEl) loadingTitleEl.textContent = t.loading;
 
       // Language select labels
       const langSelect = document.getElementById("languageSelect");
@@ -277,10 +327,15 @@
       container.innerHTML = "";
       const visiblePairs = allPairs.filter(passesFilter);
       if (!visiblePairs.length) {
-        const msg = document.createElement("div");
-        msg.className = "text-sm text-slate-400";
-        msg.textContent = t().noneForFilter;
-        container.appendChild(msg);
+        const empty = document.createElement("div");
+        empty.className = "app-card p-8 text-center";
+        const isNoData = allPairs.length === 0;
+        empty.innerHTML = `
+          <div class="text-4xl mb-3 opacity-60">${isNoData ? "✓" : "📋"}</div>
+          <p class="text-slate-400 font-medium">${isNoData ? t().noneFound : t().noneForFilter}</p>
+          <p class="text-sm text-slate-500 mt-1">${isNoData ? (currentLang === "de" ? "Alles erledigt – keine Duplikate." : "All clear – no duplicates.") : (currentLang === "de" ? "Filter anpassen oder alle anzeigen." : "Adjust filter or show all.")}</p>
+        `;
+        container.appendChild(empty);
         return;
       }
 
@@ -288,7 +343,7 @@
         const aId = pair.a.id;
         const bId = pair.b.id;
         const card = document.createElement("div");
-        card.className = "bg-slate-900/60 border border-slate-800 rounded-xl p-4 shadow-lg";
+        card.className = "app-card p-5";
 
         const pairKey = `${aId}-${bId}`;
         const header = document.createElement("div");
@@ -337,8 +392,8 @@
           <div class="text-xs text-slate-400 mb-1">ID ${aId}</div>
           <div class="text-xs text-slate-400 mb-1">${currentLang === "de" ? "Korrespondent" : "Correspondent"}: ${formatCorrespondent(pair.a.correspondent)}</div>
           <div class="text-xs text-slate-400 mb-2">Tags: ${formatTags(pair.a.tags)}</div>
-          <div class="bg-slate-950/60 border border-slate-800 rounded-lg overflow-hidden flex items-center justify-center h-56">
-            <iframe src="${pair.a.preview_url}" class="w-full h-full scale-75 origin-top" loading="lazy"></iframe>
+          <div class="bg-slate-950/80 border border-slate-700 rounded-lg overflow-hidden flex items-center justify-center min-h-[14rem]">
+            <iframe src="${pair.a.preview_url}" class="w-full h-full min-h-[14rem] scale-75 origin-top" loading="lazy" title="Preview ${aId}"></iframe>
           </div>
         `;
 
@@ -350,8 +405,8 @@
           <div class="text-xs text-slate-400 mb-1">ID ${bId}</div>
           <div class="text-xs text-slate-400 mb-1">${currentLang === "de" ? "Korrespondent" : "Correspondent"}: ${formatCorrespondent(pair.b.correspondent)}</div>
           <div class="text-xs text-slate-400 mb-2">Tags: ${formatTags(pair.b.tags)}</div>
-          <div class="bg-slate-950/60 border border-slate-800 rounded-lg overflow-hidden flex items-center justify-center h-56">
-            <iframe src="${pair.b.preview_url}" class="w-full h-full scale-75 origin-top" loading="lazy"></iframe>
+          <div class="bg-slate-950/80 border border-slate-700 rounded-lg overflow-hidden flex items-center justify-center min-h-[14rem]">
+            <iframe src="${pair.b.preview_url}" class="w-full h-full min-h-[14rem] scale-75 origin-top" loading="lazy" title="Preview ${bId}"></iframe>
           </div>
         `;
 
@@ -484,15 +539,17 @@
     }
 
     function showProgress(show) {
-      const section = document.getElementById("progressSection");
+      const overlay = document.getElementById("loadingOverlay");
       const logEl = document.getElementById("loadLog");
+      const phaseEl = document.getElementById("loadingPhase");
       if (show) {
-        section.classList.remove("hidden");
+        overlay.classList.remove("hidden");
         logEl.textContent = "";
+        phaseEl.textContent = currentLang === "de" ? "Verbindung wird hergestellt…" : "Connecting…";
         document.getElementById("progressBar").style.width = "0%";
         document.getElementById("progressPercent").textContent = "0%";
       } else {
-        section.classList.add("hidden");
+        overlay.classList.add("hidden");
       }
     }
 
@@ -500,19 +557,31 @@
       const bar = document.getElementById("progressBar");
       const percentEl = document.getElementById("progressPercent");
       const logEl = document.getElementById("loadLog");
+      const phaseEl = document.getElementById("loadingPhase");
       let pct = 0;
       if (total != null && total > 0) {
         pct = Math.min(100, Math.round((100 * current) / total));
       } else if (current > 0) {
-        pct = 50; // indeterminate-style
+        pct = 50;
       }
       bar.style.width = pct + "%";
       percentEl.textContent = total != null ? pct + "%" : "…";
       if (message) {
+        phaseEl.textContent = message;
         const line = "[" + new Date().toLocaleTimeString() + "] " + message + "\n";
         logEl.textContent += line;
         logEl.scrollTop = logEl.scrollHeight;
       }
+    }
+
+    function showToast(message, type) {
+      const container = document.getElementById("toastContainer");
+      const el = document.createElement("div");
+      el.className = "toast app-card px-4 py-3 text-sm " + (type === "error" ? "border-red-500/50 text-red-200" : "border-slate-600 text-slate-200");
+      el.setAttribute("role", "alert");
+      el.textContent = message;
+      container.appendChild(el);
+      setTimeout(() => el.remove(), 5000);
     }
 
     async function loadPairs() {
@@ -571,10 +640,12 @@
         if (errorMessage) {
           statusEl.textContent = t().errorLoadDuplicates + ": " + errorMessage;
           logEl.textContent += "[" + new Date().toLocaleTimeString() + "] FEHLER: " + errorMessage + "\n";
+          showToast(t().errorLoadDuplicates + ": " + errorMessage, "error");
           return;
         }
         if (!resultData) {
           statusEl.textContent = t().errorLoadDuplicates + " (keine Daten)";
+          showToast(t().errorLoadDuplicates + " (keine Daten)", "error");
           return;
         }
 
@@ -600,6 +671,7 @@
         showProgress(false);
         statusEl.textContent = `${t().errorLoadDuplicates}: ${err.message || err}`;
         logEl.textContent += "[" + new Date().toLocaleTimeString() + "] " + (currentLang === "de" ? "Fehler:" : "Error:") + " " + (err.message || err) + "\n";
+        showToast(`${t().errorLoadDuplicates}: ${err.message || err}`, "error");
       }
     }
 
@@ -614,7 +686,7 @@
         });
         if (!resp.ok) {
           const text = await resp.text();
-          alert(`${t().errorDelete}: ${text}`);
+          showToast(`${t().errorDelete}: ${text}`, "error");
           return;
         }
         selectedPairs.delete(`${keepId}-${removeId}`);
@@ -622,7 +694,7 @@
         cardElement.remove();
       } catch (err) {
         console.error(err);
-        alert(`${t().errorDelete}: ${err}`);
+        showToast(`${t().errorDelete}: ${err.message || err}`, "error");
       }
     }
 
@@ -633,7 +705,7 @@
         removeIds.push(action === "deleteA" ? aId : bId);
       }
       if (!removeIds.length) {
-        alert(t().noSelection);
+        showToast(t().noSelection, "error");
         return;
       }
       if (!confirm(t().confirmDeleteSelected(removeIds.length))) {
@@ -650,7 +722,7 @@
         });
         if (!resp.ok) {
           const text = await resp.text();
-          alert(`${t().errorBulkDelete}: ${text}`);
+          showToast(`${t().errorBulkDelete}: ${text}`, "error");
           return;
         }
         const data = await resp.json();
@@ -664,10 +736,11 @@
             }
           }
         });
+        showToast(currentLang === "de" ? `${deleted.length} Dokument(e) gelöscht.` : `${deleted.length} document(s) deleted.`, "info");
         await loadPairs();
       } catch (err) {
         console.error(err);
-        alert(`${t().errorBulkDelete}: ${err}`);
+        showToast(`${t().errorBulkDelete}: ${err.message || err}`, "error");
       } finally {
         deleteSelectedBtn.disabled = false;
         deleteSelectedBtn.textContent = t().deleteSelected;
@@ -693,7 +766,7 @@
         });
         if (!resp.ok) {
           const text = await resp.text();
-          alert(`${t().errorBulkDelete}: ${text}`);
+          showToast(`${t().errorBulkDelete}: ${text}`, "error");
           deleteAllPerfectBtn.disabled = false;
           deleteAllPerfectBtn.textContent = t().deleteAllPerfect;
           return;
@@ -721,14 +794,14 @@
               const result = s.last_result || {};
               const deleted = result.deleted_count ?? s.deleted_count ?? 0;
               const groups = result.groups_processed ?? 0;
-              alert(t().bulkDoneAlert(deleted, groups));
+              showToast(t().bulkDoneAlert(deleted, groups), "info");
               deleteAllPerfectBtn.textContent = t().deleteAllPerfect;
               deleteAllPerfectBtn.disabled = false;
               await loadPairs();
             }
           } catch (err) {
             console.error(err);
-            alert(`${t().bulkStatusError}: ${err}`);
+            showToast(`${t().bulkStatusError}: ${err.message || err}`, "error");
             deleteAllPerfectBtn.textContent = t().deleteAllPerfect;
             deleteAllPerfectBtn.disabled = false;
           }
@@ -737,7 +810,7 @@
         pollStatus();
       } catch (err) {
         console.error(err);
-        alert(`${t().errorBulkDelete}: ${err}`);
+        showToast(`${t().errorBulkDelete}: ${err.message || err}`, "error");
         deleteAllPerfectBtn.disabled = false;
         deleteAllPerfectBtn.textContent = t().deleteAllPerfect;
       }
