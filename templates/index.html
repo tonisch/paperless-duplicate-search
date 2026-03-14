@@ -634,12 +634,19 @@
         } else {
           appendLog(currentLang === "de" ? "Polling gestartet." : "Polling started.");
         }
+        const pollStart = Date.now();
+        const paperlessHintAfterMs = 90000;
+        let paperlessHintShown = false;
         const poll = () =>
           fetch("/api/duplicates/status")
             .then((r) => r.json())
             .then((s) => {
               const p = s.progress || {};
               updateProgress(p.current ?? 0, p.total ?? null, p.message ?? "");
+              if (s.status === "running" && (Date.now() - pollStart) > paperlessHintAfterMs && !paperlessHintShown && (p.message || "").indexOf("Paperless") >= 0) {
+                paperlessHintShown = true;
+                appendLog(currentLang === "de" ? "Hinweis: Paperless-Abfrage dauert sehr lange – prüfe PAPERLESS_URL und Netzwerk (Container kann Paperless erreichen?)." : "Note: Paperless request taking very long – check PAPERLESS_URL and network (can container reach Paperless?).");
+              }
               if (s.status === "done" && s.result) {
                 const resultData = s.result;
                 updateProgress(1, 1, currentLang === "de" ? "Fertig." : "Done.");

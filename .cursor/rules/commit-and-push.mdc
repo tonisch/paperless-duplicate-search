@@ -1,13 +1,12 @@
 ---
-description: Nach Code-Änderungen commit + push; nach Push Server per SSH aktualisieren
+description: Nach Code-Änderungen commit + push; nach Push Server per SSH aktualisieren und prüfen
 alwaysApply: true
 ---
 
 # Auto-Commit und Server-Update
 
 - **Nach Code-Änderungen:** Alle geänderten Dateien stagen, mit aussagekräftiger Message committen (z. B. auf Deutsch) und zu `origin` pushen.
-- **Nach einem Push:** Server aktualisieren mit:
-  ```bash
-  ssh nancy "cd ~/paperless-duplicate-search && git pull && docker-compose down && docker-compose up -d --build"
-  ```
-  App-URL: http://10.23.42.21:8023
+- **Nach einem Push:**
+  1. Server aktualisieren: `ssh nancy "cd ~/paperless-duplicate-search && git pull && docker-compose down && docker-compose up -d --build"`
+  2. **Prüfung:** Auf nancy ausführen: `curl -s http://127.0.0.1:8023/api/ping` (erwartet: `{"ok":true}`). Optional: `curl -s -X POST http://127.0.0.1:8023/api/duplicates/start` und `curl -s http://127.0.0.1:8023/api/duplicates/status` – Status sollte "running" oder "done" zeigen. Ergebnis dem Nutzer kurz mitteilen (z. B. „Ping OK“, „Start/Status OK“ oder Fehler).
+- App-URL: http://10.23.42.21:8023
