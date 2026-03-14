@@ -57,7 +57,7 @@
         </div>
         <details class="w-full" open>
           <summary class="cursor-pointer text-sm text-slate-500 hover:text-slate-400 select-none">Log</summary>
-          <pre id="loadLog" class="mt-2 p-3 bg-slate-900/80 border border-slate-700 rounded-lg text-xs text-slate-400 font-mono max-h-40 overflow-auto whitespace-pre-wrap"></pre>
+          <pre id="loadLog" class="mt-2 p-3 bg-slate-900/80 border border-slate-700 rounded-lg text-xs text-slate-400 font-mono max-h-40 overflow-auto whitespace-pre-wrap">[--] Starte Abfrage…</pre>
         </details>
       </div>
     </div>
@@ -544,7 +544,6 @@
       const phaseEl = document.getElementById("loadingPhase");
       if (show) {
         if (overlay) overlay.classList.remove("hidden");
-        if (logEl) logEl.textContent = "";
         if (phaseEl) phaseEl.textContent = currentLang === "de" ? "Starte Abfrage…" : "Starting request…";
         const bar = document.getElementById("progressBar");
         const pct = document.getElementById("progressPercent");
@@ -597,12 +596,11 @@
     }
 
     async function loadPairs() {
-      statusEl.textContent = t().loading;
-      container.innerHTML = "";
-      showProgress(true);
       const logEl = document.getElementById("loadLog");
-      logEl.textContent = "";
-      appendLog(currentLang === "de" ? "Starte Abfrage…" : "Starting request…");
+      if (logEl) logEl.textContent = "[" + new Date().toLocaleTimeString() + "] " + (currentLang === "de" ? "Starte Abfrage…" : "Starting request…") + "\n";
+      if (statusEl) statusEl.textContent = t().loading;
+      if (container) container.innerHTML = "";
+      showProgress(true);
       updateProgress(0, null, currentLang === "de" ? "Starte Abfrage…" : "Starting request…");
 
       try {
@@ -879,16 +877,23 @@
       renderPairs();
     });
 
-    // Initial language setup und Laden starten (loadPairs immer ausführen, auch wenn applyTranslations fehlschlägt)
-    currentLang = detectLanguage();
-    try {
-      const langSelect = document.getElementById("languageSelect");
-      if (langSelect) langSelect.value = "auto";
-      applyTranslations();
-    } catch (e) {
-      console.error("applyTranslations:", e);
+    // Initial language setup und Laden starten, sobald DOM bereit ist (damit loadLog etc. existiert)
+    function init() {
+      currentLang = detectLanguage();
+      try {
+        const langSelect = document.getElementById("languageSelect");
+        if (langSelect) langSelect.value = "auto";
+        applyTranslations();
+      } catch (e) {
+        console.error("applyTranslations:", e);
+      }
+      loadPairs();
     }
-    loadPairs();
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", init);
+    } else {
+      init();
+    }
   </script>
 </body>
 </html>
