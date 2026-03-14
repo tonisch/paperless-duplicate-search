@@ -237,7 +237,7 @@
       }
       try {
         deleteAllPerfectBtn.disabled = true;
-        deleteAllPerfectBtn.textContent = "Bereinige 100%-Duplikate...";
+        deleteAllPerfectBtn.textContent = "Bereinigung gestartet...";
         const resp = await fetch("/api/delete-perfect-duplicates", {
           method: "POST",
         });
@@ -246,15 +246,43 @@
           alert("Fehler beim Bereinigen: " + text);
           return;
         }
-        const data = await resp.json();
-        alert(`Fertig. Gelöscht: ${data.deleted_count} Dokument(e) in ${data.groups_processed} Duplikat-Gruppen.`);
-        await loadPairs();
+
+        // Polling für Fortschritt
+        async function pollStatus() {
+          try {
+            const sResp = await fetch("/api/delete-perfect-duplicates/status");
+            if (!sResp.ok) {
+              throw new Error("HTTP " + sResp.status);
+            }
+            const s = await sResp.json();
+            if (s.running) {
+              const current = s.current_group || 0;
+              const total = s.total_groups || 0;
+              const deleted = s.deleted_count || 0;
+              statusEl.textContent = `Bereinige 100%-Duplikate… Gruppe ${current} / ${total}, gelöscht: ${deleted}`;
+              deleteAllPerfectBtn.textContent = "Bereinige 100%-Duplikate…";
+              setTimeout(pollStatus, 1000);
+            } else {
+              const result = s.last_result || {};
+              const deleted = result.deleted_count ?? s.deleted_count ?? 0;
+              const groups = result.groups_processed ?? 0;
+              alert(`Fertig. Gelöscht: ${deleted} Dokument(e) in ${groups} Duplikat-Gruppen.`);
+              deleteAllPerfectBtn.textContent = "Alle 100%-Duplikate bereinigen";
+              deleteAllPerfectBtn.disabled = false;
+              await loadPairs();
+            }
+          } catch (err) {
+            console.error(err);
+            alert("Fehler beim Lesen des Fortschritts: " + err);
+            deleteAllPerfectBtn.textContent = "Alle 100%-Duplikate bereinigen";
+            deleteAllPerfectBtn.disabled = false;
+          }
+        }
+
+        pollStatus();
       } catch (err) {
         console.error(err);
         alert("Fehler beim Bereinigen: " + err);
-      } finally {
-        deleteAllPerfectBtn.disabled = false;
-        deleteAllPerfectBtn.textContent = "Alle 100%-Duplikate bereinigen";
       }
     }
 

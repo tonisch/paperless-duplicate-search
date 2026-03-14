@@ -1,4 +1,5 @@
 import os
+import asyncio
 from typing import List, Dict, Any
 
 from fastapi import FastAPI, Request, HTTPException, status
@@ -21,6 +22,13 @@ HEADERS = {
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
+
+bulk_delete_state: Dict[str, Any] = {
+    "running": False,
+    "current_group": 0,
+    "total_groups": 0,
+    "deleted_count": 0,
+}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -161,13 +169,12 @@ async def get_duplicates():
     }
 
 
-@app.post("/api/delete-perfect-duplicates")
-async def delete_perfect_duplicates():
-    """
-    Löscht alle Duplikate mit 100 % Ähnlichkeit (similar_title_and_content),
-    behält pro zusammenhängender Duplikat-Gruppe genau ein Dokument.
-    Auswahl des zu behaltenden Dokuments: nach created-Datum (falls vorhanden), sonst nach ID.
-    """
+async def _run_bulk_delete_perfect_duplicates() -> None:
+    bulk_delete_state["running"] = True
+    bulk_delete_state["current_group"] = 0
+    bulk_delete_state["total_groups"] = 0
+    bulk_delete_state["deleted_count"] = 0
+
     docs = await fetch_all_documents()
 
     deleted_ids: list[int] = []
@@ -225,14 +232,17 @@ async def delete_perfect_duplicates():
         if len(comp) > 1:
             components.append(comp)
 
+    bulk_delete_state["total_groups"] = len(components)
+
     async with httpx.AsyncClient(
         base_url=PAPERLESS_URL,
         headers=HEADERS,
         timeout=60.0,
         follow_redirects=True,
     ) as client:
-        for comp in components:
+        for idx, comp in enumerate(components, start=1):
             groups_processed += 1
+            bulk_delete_state["current_group"] = idx
 
             # Innerhalb der Komponente ein Dokument behalten, Rest löschen
             sorted_ids = sorted(
@@ -249,18 +259,40 @@ async def delete_perfect_duplicates():
                 resp = await client.delete(f"/api/documents/{doc_id}/")
                 if resp.status_code in (200, 204):
                     deleted_ids.append(doc_id)
+                    bulk_delete_state["deleted_count"] += 1
                 else:
                     raise HTTPException(
                         status_code=resp.status_code,
                         detail=f"Fehler beim Löschen von Dokument {doc_id}: {resp.text}",
                     )
 
-    return {
+    bulk_delete_state["running"] = False
+    bulk_delete_state["last_result"] = {
         "status": "ok",
         "deleted_ids": deleted_ids,
         "deleted_count": len(deleted_ids),
         "groups_processed": groups_processed,
     }
+
+
+@app.post("/api/delete-perfect-duplicates")
+async def delete_perfect_duplicates():
+    """
+    Startet den asynchronen Bereinigungslauf im Hintergrund.
+    """
+    if bulk_delete_state.get("running"):
+        raise HTTPException(status_code=409, detail="Bereinigung läuft bereits.")
+
+    asyncio.create_task(_run_bulk_delete_perfect_duplicates())
+    return {"status": "started"}
+
+
+@app.get("/api/delete-perfect-duplicates/status")
+async def delete_perfect_duplicates_status():
+    """
+    Liefert den aktuellen Fortschritt des Bereinigungslaufs.
+    """
+    return bulk_delete_state
 
 
 @app.get("/preview/{doc_id}")
