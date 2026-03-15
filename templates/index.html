@@ -104,6 +104,12 @@
 
     <div id="status" class="mb-4 text-sm text-slate-400"></div>
 
+    <div id="summaryCard" class="app-card p-4 mb-4 hidden">
+      <div class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2" id="summaryTitle"></div>
+      <p id="summaryLine" class="text-sm text-slate-300 mb-3"></p>
+      <div id="summaryChips" class="flex flex-wrap gap-2"></div>
+    </div>
+
     <div class="app-card p-4 mb-6">
       <div class="mb-4">
         <div id="filterLabel" class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">
@@ -113,8 +119,8 @@
           <label class="text-sm text-slate-400">
             <span class="mr-2">Anzeige:</span>
             <select id="similarityFilter" class="app-card border-slate-600 text-slate-100 text-sm rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500/50 focus:outline-none min-w-[11rem]">
-              <optgroup label="Genau" id="filterOptgroupExact"></optgroup>
-              <optgroup label="Mindest (≥)" id="filterOptgroupGe"></optgroup>
+              <optgroup label="By band" id="filterOptgroupBands"></optgroup>
+              <optgroup label="At least (≥)" id="filterOptgroupGe"></optgroup>
             </select>
           </label>
           <span id="filterCurrentSummary" class="text-sm text-slate-500"></span>
@@ -147,6 +153,18 @@
       </details>
     </section>
 
+    <div id="viewToolbar" class="flex flex-wrap items-center gap-4 mb-3 hidden">
+      <span class="text-sm text-slate-400" id="viewLabel">View:</span>
+      <div class="flex rounded-lg border border-slate-600 overflow-hidden">
+        <button type="button" id="viewCardsBtn" class="view-mode-btn px-3 py-1.5 text-sm bg-slate-700 text-slate-200 border-r border-slate-600">Cards</button>
+        <button type="button" id="viewListBtn" class="view-mode-btn px-3 py-1.5 text-sm text-slate-400 hover:bg-slate-800">List</button>
+      </div>
+      <span class="text-sm text-slate-500" id="paginationInfo"></span>
+      <div class="flex items-center gap-2">
+        <button type="button" id="pagePrevBtn" class="px-2 py-1 text-sm rounded border border-slate-600 text-slate-400 hover:bg-slate-800 disabled:opacity-50" disabled>Prev</button>
+        <button type="button" id="pageNextBtn" class="px-2 py-1 text-sm rounded border border-slate-600 text-slate-400 hover:bg-slate-800 disabled:opacity-50" disabled>Next</button>
+      </div>
+    </div>
     <div id="pairsContainer" class="space-y-6"></div>
   </div>
 
@@ -264,15 +282,19 @@
       const filterLabelEl = document.getElementById("filterLabel");
       if (filterLabelEl) {
         filterLabelEl.textContent = currentLang === "de"
-          ? "Arbeitsreihenfolge: von super ähnlich (100 %) nach weniger – Filter oder Klick auf Balken im Diagramm"
-          : "Work order: from super similar (100%) to less – use filter or click a bar in the chart";
+          ? "Nach Ähnlichkeit filtern (Bereiche oder Mindest-%); Klick auf Balken setzt Filter."
+          : "Filter by similarity (bands or minimum %); click a bar to set filter.";
       }
       const chartClickHint = document.getElementById("chartClickHint");
       if (chartClickHint) {
         chartClickHint.textContent = currentLang === "de"
-          ? "Klick auf einen Balken → Filter auf genau diese Ähnlichkeit (1 %-Schritte 80–100)."
-          : "Click a bar → filter to that exact similarity (1% steps 80–100).";
+          ? "Klick auf einen Balken → Filter auf diesen Bereich."
+          : "Click a bar → filter to this band.";
       }
+      const filterSelectLabelEl = document.getElementById("filterSelectLabel");
+      if (filterSelectLabelEl) filterSelectLabelEl.textContent = currentLang === "de" ? "Anzeige:" : "Show:";
+      const viewLabelEl = document.getElementById("viewLabel");
+      if (viewLabelEl) viewLabelEl.textContent = currentLang === "de" ? "Ansicht:" : "View:";
 
       document.getElementById("deleteSelectedBtn").textContent =
         t.deleteSelected;
@@ -304,21 +326,35 @@
     /** @type {Map<string, 'deleteA'|'deleteB'>} pair key -> which document to delete */
     let selectedPairs = new Map();
     let similarityChart = null;
+    let viewMode = "cards";
+    let currentPage = 1;
+    const PAGE_SIZES = [25, 50, 100];
+    let pageSize = 50;
+
+    const BANDS = [
+      { min: 80, max: 80, value: "band_80_80", labelShort: "80%" },
+      { min: 81, max: 85, value: "band_81_85", labelShort: "81\u201385%" },
+      { min: 86, max: 90, value: "band_86_90", labelShort: "86\u201390%" },
+      { min: 91, max: 95, value: "band_91_95", labelShort: "91\u201395%" },
+      { min: 96, max: 100, value: "band_96_100", labelShort: "96\u2013100%" },
+    ];
 
     function t() {
       return I18N[currentLang];
     }
 
     function passesFilter(pair) {
-      const v = filterSelect.value || "exact_100";
+      const v = filterSelect.value || "all";
       const s = pair.similarity;
-      if (v.startsWith("exact_")) {
-        const n = parseInt(v.replace("exact_", ""), 10);
-        return Math.round(s) === n;
-      }
+      const r = Math.round(s);
+      if (v === "all" || v === "ge_80") return s >= 80;
       if (v.startsWith("ge_")) {
         const n = parseInt(v.replace("ge_", ""), 10);
         return s >= n;
+      }
+      if (v.startsWith("band_")) {
+        const band = BANDS.find((b) => b.value === v);
+        if (band) return r >= band.min && r <= band.max;
       }
       return true;
     }
@@ -327,49 +363,99 @@
       return allPairs.filter(passesFilter).length;
     }
 
-    /** Similarity distribution from allPairs (for chart/status without reload). */
-    function getSimilarityCounts() {
-      const counts = {};
-      for (let pct = 80; pct <= 100; pct++) counts[pct] = 0;
+    /** Per-band counts for chart; also total and count100 for status. */
+    function getBandCounts() {
+      const bandCounts = BANDS.map(() => 0);
+      let count100 = 0;
       allPairs.forEach((p) => {
-        const s = Math.round(p.similarity);
-        if (s >= 80 && s <= 100) counts[s] = (counts[s] || 0) + 1;
+        const r = Math.round(p.similarity);
+        if (r >= 80 && r <= 100) {
+          const idx = BANDS.findIndex((b) => r >= b.min && r <= b.max);
+          if (idx >= 0) bandCounts[idx]++;
+          if (r === 100) count100++;
+        }
       });
-      return counts;
+      return { bandCounts, total: allPairs.length, count100 };
     }
 
-    /** Update chart, filter summary, status and card list from current allPairs (no reload). */
+    /** Update summary, chart, filter summary, status and list from current allPairs (no reload). */
     function refreshChartAndFilter() {
-      const counts = getSimilarityCounts();
-      updateChart(counts, filterSelect.value || "exact_100");
+      const { bandCounts, total, count100 } = getBandCounts();
+      updateSummaryCard(bandCounts);
+      updateChart(bandCounts, filterSelect.value || "all");
       updateFilterSummary();
-      const total = allPairs.length;
-      const count100 = counts[100] || 0;
       statusEl.textContent = total ? t().statusSummary(total, count100) : t().noneFound;
+      const viewToolbar = document.getElementById("viewToolbar");
+      if (viewToolbar) viewToolbar.classList.toggle("hidden", total === 0);
       renderPairs();
     }
 
-    function buildFilterDropdown() {
-      const exactGroup = document.getElementById("filterOptgroupExact");
-      const geGroup = document.getElementById("filterOptgroupGe");
-      if (!exactGroup || !geGroup) return;
-      const currentValue = filterSelect.value;
-      exactGroup.label = currentLang === "de" ? "Genau" : "Exactly";
-      geGroup.label = currentLang === "de" ? "Mindest (≥)" : "At least (≥)";
-      exactGroup.innerHTML = "";
-      geGroup.innerHTML = "";
-      for (let pct = 100; pct >= 80; pct--) {
-        const o1 = document.createElement("option");
-        o1.value = "exact_" + pct;
-        o1.textContent = (currentLang === "de" ? "Genau " : "Exactly ") + pct + " %";
-        exactGroup.appendChild(o1);
-        const o2 = document.createElement("option");
-        o2.value = "ge_" + pct;
-        o2.textContent = "≥ " + pct + " %";
-        geGroup.appendChild(o2);
+    function updateSummaryCard(bandCounts) {
+      const card = document.getElementById("summaryCard");
+      const titleEl = document.getElementById("summaryTitle");
+      const lineEl = document.getElementById("summaryLine");
+      const chipsEl = document.getElementById("summaryChips");
+      if (!card || !chipsEl) return;
+      const total = allPairs.length;
+      if (total === 0) {
+        card.classList.add("hidden");
+        return;
       }
+      card.classList.remove("hidden");
+      const isDe = currentLang === "de";
+      if (titleEl) titleEl.textContent = isDe ? "Übersicht" : "Overview";
+      if (lineEl) lineEl.textContent = isDe ? `${total} Duplikat-Paare nach Ähnlichkeit:` : `${total} duplicate pairs by similarity:`;
+      chipsEl.innerHTML = "";
+      const allChip = document.createElement("button");
+      allChip.type = "button";
+      allChip.className = "summary-chip px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors " + (filterSelect.value === "all" ? "bg-emerald-600 text-white border-emerald-500" : "bg-slate-800 text-slate-300 border-slate-600 hover:bg-slate-700");
+      allChip.textContent = (isDe ? "Alle" : "All") + " (" + total + ")";
+      allChip.dataset.filter = "all";
+      allChip.addEventListener("click", () => { filterSelect.value = "all"; refreshChartAndFilter(); });
+      chipsEl.appendChild(allChip);
+      BANDS.forEach((band, idx) => {
+        const n = bandCounts[idx] || 0;
+        if (n === 0) return;
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "summary-chip px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors " + (filterSelect.value === band.value ? "bg-emerald-600 text-white border-emerald-500" : "bg-slate-800 text-slate-300 border-slate-600 hover:bg-slate-700");
+        chip.textContent = band.labelShort + " (" + n + ")";
+        chip.dataset.filter = band.value;
+        chip.addEventListener("click", () => { filterSelect.value = band.value; refreshChartAndFilter(); });
+        chipsEl.appendChild(chip);
+      });
+    }
+
+    function buildFilterDropdown() {
+      const bandsGroup = document.getElementById("filterOptgroupBands");
+      const geGroup = document.getElementById("filterOptgroupGe");
+      if (!bandsGroup || !geGroup) return;
+      const isDe = currentLang === "de";
+      bandsGroup.label = isDe ? "Nach Bereich" : "By band";
+      geGroup.label = isDe ? "Mindest (≥)" : "At least (≥)";
+      bandsGroup.innerHTML = "";
+      geGroup.innerHTML = "";
+      const allOpt = document.createElement("option");
+      allOpt.value = "all";
+      allOpt.textContent = (isDe ? "Alle (≥80%)" : "All (≥80%)");
+      bandsGroup.appendChild(allOpt);
+      BANDS.forEach((b) => {
+        const o = document.createElement("option");
+        o.value = b.value;
+        o.textContent = b.labelShort;
+        bandsGroup.appendChild(o);
+      });
+      [80, 85, 90, 95, 100].forEach((pct) => {
+        const o = document.createElement("option");
+        o.value = "ge_" + pct;
+        o.textContent = "≥ " + pct + " %";
+        geGroup.appendChild(o);
+      });
+      const currentValue = filterSelect.value;
       if (currentValue && document.querySelector('#similarityFilter option[value="' + currentValue + '"]')) {
         filterSelect.value = currentValue;
+      } else {
+        filterSelect.value = "all";
       }
     }
 
@@ -378,10 +464,13 @@
       if (!el) return;
       const pairCount = getFilteredCount();
       const docCount = pairCount * 2;
-      const v = filterSelect.value || "exact_100";
+      const v = filterSelect.value || "all";
       let label = "";
-      if (v.startsWith("exact_")) label = (currentLang === "de" ? "Genau " : "Exactly ") + v.replace("exact_", "") + " %";
-      else if (v.startsWith("ge_")) label = "≥ " + v.replace("ge_", "") + " %";
+      if (v === "all") label = currentLang === "de" ? "Alle ≥80%" : "All ≥80%";
+      else if (v.startsWith("band_")) {
+        const b = BANDS.find((x) => x.value === v);
+        label = b ? b.labelShort : v;
+      } else if (v.startsWith("ge_")) label = "≥ " + v.replace("ge_", "") + " %";
       const pairLabel = currentLang === "de" ? "Paare" : "pairs";
       const docLabel = currentLang === "de" ? "Dokumente" : "documents";
       el.textContent = pairCount + " " + pairLabel + " (" + docCount + " " + docLabel + ") · " + label;
@@ -436,10 +525,75 @@
       return div.innerHTML;
     }
 
+    function updatePaginationUI(totalVisible, start, onPageCount) {
+      const infoEl = document.getElementById("paginationInfo");
+      const prevBtn = document.getElementById("pagePrevBtn");
+      const nextBtn = document.getElementById("pageNextBtn");
+      const isDe = currentLang === "de";
+      if (infoEl) infoEl.textContent = totalVisible ? (isDe ? `Zeige ${start + 1}–${start + onPageCount} von ${totalVisible}` : `Showing ${start + 1}–${start + onPageCount} of ${totalVisible}`) : "";
+      if (prevBtn) prevBtn.disabled = currentPage <= 1;
+      if (nextBtn) nextBtn.disabled = currentPage >= Math.max(1, Math.ceil(totalVisible / pageSize));
+    }
+
+    function renderListRow(pair) {
+      const aId = pair.a.id;
+      const bId = pair.b.id;
+      const pairKey = `${aId}-${bId}`;
+      const sim = pair.similarity;
+      const titleA = (pair.a.title || "").trim() || (currentLang === "de" ? "(kein Titel)" : "(no title)");
+      const titleB = (pair.b.title || "").trim() || (currentLang === "de" ? "(kein Titel)" : "(no title)");
+      const row = document.createElement("div");
+      row.className = "app-card p-3 mb-2";
+      row.innerHTML = `
+        <div class="flex flex-wrap items-center gap-3">
+          <span class="flex-1 min-w-0 truncate text-sm text-slate-300" title="${escapeHtml(titleA)}">${escapeHtml(titleA)}</span>
+          <span class="inline-block px-2 py-0.5 rounded text-sm font-semibold shrink-0 ${similarityBadgeClass(sim)}">${sim.toFixed(1)}%</span>
+          <span class="flex-1 min-w-0 truncate text-sm text-slate-300" title="${escapeHtml(titleB)}">${escapeHtml(titleB)}</span>
+          <div class="flex items-center gap-2 shrink-0">
+            <button type="button" class="list-keep-left px-2 py-1 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-200" data-pair-key="${pairKey}" data-keep-id="${aId}" data-remove-id="${bId}">${t().keepLeft}</button>
+            <button type="button" class="list-keep-right px-2 py-1 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-200" data-pair-key="${pairKey}" data-keep-id="${bId}" data-remove-id="${aId}">${t().keepRight}</button>
+            <a href="#" class="list-expand text-xs text-slate-500 hover:text-slate-300" data-pair-key="${pairKey}">${currentLang === "de" ? "Details" : "Details"}</a>
+          </div>
+        </div>
+        <div class="list-row-details mt-3 hidden border-t border-slate-700 pt-3 list-row-detail-content"></div>
+      `;
+      const details = row.querySelector(".list-row-details");
+      const expandLink = row.querySelector(".list-expand");
+      expandLink.addEventListener("click", (e) => {
+        e.preventDefault();
+        details.classList.toggle("hidden");
+        if (!details.classList.contains("hidden") && !details.innerHTML) {
+          const dateA = formatDate(pair.a.created);
+          const dateB = formatDate(pair.b.created);
+          details.innerHTML = `
+            <div class="grid grid-cols-[auto_1fr_1fr] gap-x-4 gap-y-1 text-xs mb-2">
+              <span class="text-slate-500"></span><span class="text-slate-500">ID ${aId}</span><span class="text-slate-500">ID ${bId}</span>
+              <span class="text-slate-500">${currentLang === "de" ? "Titel" : "Title"}</span><span class="break-words">${escapeHtml(titleA)}</span><span class="break-words">${escapeHtml(titleB)}</span>
+              <span class="text-slate-500">${currentLang === "de" ? "Datum" : "Date"}</span><span>${escapeHtml(dateA)}</span><span>${escapeHtml(dateB)}</span>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <iframe src="${pair.a.preview_url}" class="w-full h-48 rounded border border-slate-700" loading="lazy" title="Preview ${aId}"></iframe>
+              <iframe src="${pair.b.preview_url}" class="w-full h-48 rounded border border-slate-700" loading="lazy" title="Preview ${bId}"></iframe>
+            </div>
+          `;
+        }
+      });
+      row.querySelector(".list-keep-left").addEventListener("click", async () => {
+        if (!confirm(t().confirmDeleteRight(bId))) return;
+        await deleteDoc(aId, bId, row);
+      });
+      row.querySelector(".list-keep-right").addEventListener("click", async () => {
+        if (!confirm(t().confirmDeleteLeft(aId))) return;
+        await deleteDoc(bId, aId, row);
+      });
+      container.appendChild(row);
+    }
+
     function renderPairs() {
       container.innerHTML = "";
       const visiblePairs = allPairs.filter(passesFilter);
-      if (!visiblePairs.length) {
+      const totalVisible = visiblePairs.length;
+      if (!totalVisible) {
         const empty = document.createElement("div");
         empty.className = "app-card p-8 text-center";
         const isNoData = allPairs.length === 0;
@@ -449,10 +603,25 @@
           <p class="text-sm text-slate-500 mt-1">${isNoData ? (currentLang === "de" ? "Alles erledigt – keine Duplikate." : "All clear – no duplicates.") : (currentLang === "de" ? "Filter anpassen oder alle anzeigen." : "Adjust filter or show all.")}</p>
         `;
         container.appendChild(empty);
+        updatePaginationUI(0, 0, 0);
         return;
       }
 
-      for (const pair of visiblePairs) {
+      const totalPages = Math.max(1, Math.ceil(totalVisible / pageSize));
+      currentPage = Math.min(Math.max(1, currentPage), totalPages);
+      const start = (currentPage - 1) * pageSize;
+      const slice = visiblePairs.slice(start, start + pageSize);
+
+      updatePaginationUI(totalVisible, start, slice.length);
+
+      if (viewMode === "list") {
+        slice.forEach((pair) => renderListRow(pair));
+        const visible = allPairs.filter(passesFilter);
+        selectAllVisibleCheckbox.checked = visible.length > 0 && visible.every((p) => selectedPairs.has(`${p.a.id}-${p.b.id}`));
+        return;
+      }
+
+      for (const pair of slice) {
         const aId = pair.a.id;
         const bId = pair.b.id;
         const card = document.createElement("div");
@@ -640,85 +809,62 @@
         visible.every((p) => selectedPairs.has(`${p.a.id}-${p.b.id}`));
     }
 
-    function barActiveForFilter(pct, filterValue) {
-      if (!filterValue) return true;
-      if (filterValue.startsWith("exact_")) {
-        const n = parseInt(filterValue.replace("exact_", ""), 10);
-        return pct === n;
+    function barActiveForFilter(bandIndex, filterValue) {
+      if (!filterValue || filterValue === "all") return true;
+      if (filterValue.startsWith("band_")) {
+        return filterValue === BANDS[bandIndex].value;
       }
       if (filterValue.startsWith("ge_")) {
         const n = parseInt(filterValue.replace("ge_", ""), 10);
-        return pct >= n;
+        return BANDS[bandIndex].max >= n;
       }
       return true;
     }
 
-    function updateChart(similarityCounts, filterValue) {
+    function updateChart(bandCounts, filterValue) {
       const ctx = document.getElementById("similarityChart").getContext("2d");
-      const counts = similarityCounts || {};
-      const labels = [];
-      const values = [];
-      for (let pct = 80; pct <= 100; pct++) {
-        labels.push(pct + "%");
-        values.push(counts[pct] || counts["" + pct] || 0);
-      }
+      const labels = BANDS.map((b) => b.labelShort);
+      const values = bandCounts || BANDS.map(() => 0);
 
-      const baseColors = labels.map((_, i) => {
-        const pct = 80 + i;
-        if (pct === 100) return "rgba(16, 185, 129, 0.8)";
-        if (pct >= 95) return "rgba(245, 158, 11, 0.6)";
+      const baseColors = BANDS.map((b) => {
+        if (b.max === 100) return "rgba(16, 185, 129, 0.8)";
+        if (b.min >= 91) return "rgba(245, 158, 11, 0.6)";
         return "rgba(148, 163, 184, 0.5)";
       });
-      const backgroundColor = labels.map((_, i) => {
-        const pct = 80 + i;
-        const active = barActiveForFilter(pct, filterValue || "exact_100");
+      const backgroundColor = values.map((_, i) => {
+        const active = barActiveForFilter(i, filterValue || "all");
         const base = baseColors[i];
         if (active) return base;
         return base.replace(/,\s*[\d.]+\)$/, ", 0.2)");
       });
 
-      if (similarityChart) {
-        similarityChart.destroy();
-      }
+      if (similarityChart) similarityChart.destroy();
 
       similarityChart = new Chart(ctx, {
         type: "bar",
         data: {
           labels,
-          datasets: [
-            {
-              label: t().chartLabel,
-              data: values,
-              backgroundColor,
-            },
-          ],
+          datasets: [{ label: t().chartLabel, data: values, backgroundColor }],
         },
         options: {
           responsive: true,
           onClick: (evt, elements) => {
             if (elements.length === 0) return;
             const idx = elements[0].index;
-            const pct = 80 + idx;
-            filterSelect.value = "exact_" + pct;
+            filterSelect.value = BANDS[idx].value;
             refreshChartAndFilter();
           },
           plugins: {
             legend: { display: false },
             tooltip: {
               callbacks: {
-                afterLabel: () => (currentLang === "de" ? "Klick → nur diese Ähnlichkeit" : "Click → filter to this %"),
+                afterLabel: () => (currentLang === "de" ? "Klick → nur diesen Bereich" : "Click → filter to this band"),
               },
             },
           },
           scales: {
-            x: {
-              ticks: { color: "#94a3b8", font: { size: 9 }, maxRotation: 45 },
-              grid: { display: false },
-            },
-            y: {
-              ticks: { color: "#94a3b8", precision: 0 },
-              grid: { color: "rgba(148, 163, 184, 0.2)" },
-            },
+            x: { ticks: { color: "#94a3b8", font: { size: 10 }, maxRotation: 25 }, grid: { display: false } },
+            y: { ticks: { color: "#94a3b8", precision: 0 }, grid: { color: "rgba(148, 163, 184, 0.2)" } },
           },
         },
       });
@@ -1060,14 +1206,36 @@
     // Event-Listener
     reloadBtn.addEventListener("click", loadPairs);
     filterSelect.addEventListener("change", () => {
-      updateChart(getSimilarityCounts(), filterSelect.value);
+      currentPage = 1;
+      const { bandCounts } = getBandCounts();
+      updateChart(bandCounts, filterSelect.value);
       updateFilterSummary();
       renderPairs();
     });
     buildFilterDropdown();
-    const firstExact = document.querySelector('#similarityFilter option[value="exact_100"]');
-    if (firstExact) filterSelect.value = "exact_100";
+    filterSelect.value = "all";
     updateFilterSummary();
+
+    document.getElementById("viewCardsBtn").addEventListener("click", () => {
+      viewMode = "cards";
+      document.getElementById("viewCardsBtn").className = "view-mode-btn px-3 py-1.5 text-sm bg-slate-700 text-slate-200 border-r border-slate-600";
+      document.getElementById("viewListBtn").className = "view-mode-btn px-3 py-1.5 text-sm text-slate-400 hover:bg-slate-800";
+      renderPairs();
+    });
+    document.getElementById("viewListBtn").addEventListener("click", () => {
+      viewMode = "list";
+      document.getElementById("viewListBtn").className = "view-mode-btn px-3 py-1.5 text-sm bg-slate-700 text-slate-200 border-l border-slate-600";
+      document.getElementById("viewCardsBtn").className = "view-mode-btn px-3 py-1.5 text-sm text-slate-400 hover:bg-slate-800 border-r border-slate-600";
+      renderPairs();
+    });
+    document.getElementById("pagePrevBtn").addEventListener("click", () => {
+      if (currentPage > 1) { currentPage--; renderPairs(); }
+    });
+    document.getElementById("pageNextBtn").addEventListener("click", () => {
+      const visible = allPairs.filter(passesFilter);
+      const totalPages = Math.max(1, Math.ceil(visible.length / pageSize));
+      if (currentPage < totalPages) { currentPage++; renderPairs(); }
+    });
     deleteAllPerfectBtn.addEventListener("click", deleteAllPerfect);
     deleteSelectedBtn.addEventListener("click", deleteSelected);
     selectAllVisibleCheckbox.addEventListener("change", (e) => {
