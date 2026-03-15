@@ -1,49 +1,57 @@
 # Paperless Duplicate Search
 
-Kleine Webanwendung, um Duplikate in Paperless-ng/Paperless-ngx zu finden und vor dem Löschen nebeneinander zu vergleichen.
+Web app to find duplicates in Paperless-ngx and compare them side-by-side before deleting.
 
-## Voraussetzungen
+## Requirements
 
-- Python 3.12 (für lokalen Start) oder Docker
-- Paperless-Instanz mit API-Token
+- Python 3.12 (for local run) or Docker
+- Paperless-ngx instance with API token
 
-## Konfiguration
+## Configuration
 
-Folgende Umgebungsvariablen müssen gesetzt sein:
+Set these environment variables:
 
-- `PAPERLESS_URL` – Basis-URL deiner Paperless-Instanz (ohne Slash am Ende), z. B. `https://paperless.example.com`
-- `PAPERLESS_TOKEN` – API-Token eines Benutzers mit Lesens-/Löschrechten für Dokumente
+- **`PAPERLESS_URL`** – Base URL of your Paperless instance (no trailing slash), e.g. `https://paperless.example.com`
+- **`PAPERLESS_TOKEN`** – API token of a user with read/delete permission for documents
 
-## Lokaler Start
+## Local run
 
 ```bash
 cd paperless-duplicate-search
 
-export PAPERLESS_URL="https://dein-paperless-host"
-export PAPERLESS_TOKEN="DEIN_API_TOKEN"
+export PAPERLESS_URL="https://your-paperless-host"
+export PAPERLESS_TOKEN="YOUR_API_TOKEN"
 
 pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
-Danach im Browser: `http://localhost:8000`
+Then open `http://localhost:8000` in your browser.
 
 ## Docker
 
-Image bauen:
+Build the image:
 
 ```bash
 docker build -t paperless-duplicate-search .
 ```
 
-Container starten:
+Run the container:
 
 ```bash
 docker run --rm -p 8000:8000 \
-  -e PAPERLESS_URL="https://dein-paperless-host" \
-  -e PAPERLESS_TOKEN="DEIN_API_TOKEN" \
+  -e PAPERLESS_URL="https://your-paperless-host" \
+  -e PAPERLESS_TOKEN="YOUR_API_TOKEN" \
   paperless-duplicate-search
 ```
 
-Dann im Browser: `http://<server-ip>:8000`
+Then open `http://<server-ip>:8000`.
 
+## Features
+
+- Duplicate detection by checksum (100%) and by title + content similarity (80–100%)
+- Metadata (correspondent, tags, date) shown with names; date/title/correspondent/tag differences reduce similarity score
+- Filter by similarity (exact % or minimum %); chart reflects filter and stays in sync
+- Side-by-side preview and “keep left / keep right” delete
+- Bulk: select pairs and delete selected, or “Clean all 100% duplicates”
+- UI in English with optional German (language selector)

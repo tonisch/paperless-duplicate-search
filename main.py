@@ -1,3 +1,9 @@
+"""
+Paperless Duplicate Search – FastAPI backend.
+
+Finds duplicates in Paperless-ngx (by checksum and by content similarity),
+enriches with correspondent/tag names, and provides delete endpoints.
+"""
 import json
 import logging
 import os
@@ -15,7 +21,7 @@ PAPERLESS_URL = os.getenv("PAPERLESS_URL")
 PAPERLESS_TOKEN = os.getenv("PAPERLESS_TOKEN")
 
 if not PAPERLESS_URL or not PAPERLESS_TOKEN:
-    raise RuntimeError("PAPERLESS_URL und PAPERLESS_TOKEN müssen als Umgebungsvariablen gesetzt sein.")
+    raise RuntimeError("PAPERLESS_URL and PAPERLESS_TOKEN must be set as environment variables.")
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -35,7 +41,7 @@ bulk_delete_state: Dict[str, Any] = {
     "deleted_count": 0,
 }
 
-# Für Polling-Fallback (wenn Streaming gepuffert wird)
+# Polling fallback (when streaming is buffered)
 duplicate_job_state: Dict[str, Any] = {
     "status": "idle",  # idle | running | done | error
     "progress": {"message": "", "current": 0, "total": None},
@@ -54,13 +60,13 @@ async def index(request: Request):
 
 @app.get("/api/ping")
 async def ping():
-    """Sofortige Antwort – zum Prüfen der Server-Erreichbarkeit."""
+    """Immediate response for server reachability check."""
     return {"ok": True}
 
 
 @app.get("/api/paperless-check")
 async def paperless_check():
-    """Prüft, ob Paperless vom Container aus erreichbar ist (kurzer Timeout)."""
+    """Check if Paperless is reachable from the container (short timeout)."""
     try:
         async with httpx.AsyncClient(
             base_url=PAPERLESS_URL,
@@ -70,7 +76,7 @@ async def paperless_check():
         ) as client:
             resp = await client.get("/api/documents/?page_size=1")
             resp.raise_for_status()
-        return {"ok": True, "message": "Paperless erreichbar"}
+        return {"ok": True, "message": "Paperless reachable"}
     except Exception as e:
         log.warning("Paperless check failed: %s", e)
         return {"ok": False, "error": str(e)}
@@ -183,7 +189,7 @@ def build_preview_path(doc_id: int) -> str:
 
 
 def _metadata_penalty(pair: Dict[str, Any]) -> float:
-    """Abzug in Prozentpunkten: Titel/Korrespondent/Tags je 3 %, Belegdatum 20 % bei Abweichung."""
+    """Penalty in percentage points: 3% each for title/correspondent/tags, 20% for date mismatch."""
     a, b = pair["a"], pair["b"]
     same_title = ((a.get("title") or "").strip() == (b.get("title") or "").strip())
     c_a = a.get("correspondent") or {}
@@ -198,7 +204,7 @@ def _metadata_penalty(pair: Dict[str, Any]) -> float:
 
 
 def _apply_metadata_to_similarity(pairs: List[Dict[str, Any]]) -> None:
-    """Reduziert pair['similarity'] um Abzug bei abweichenden Paperless-Feldern (in-place)."""
+    """Reduce pair['similarity'] by penalty for differing Paperless metadata fields (in-place)."""
     for pair in pairs:
         penalty = _metadata_penalty(pair)
         pair["similarity"] = max(0.0, pair["similarity"] - penalty)
@@ -211,15 +217,15 @@ def _yield_line(obj: dict) -> str:
 async def stream_duplicates() -> AsyncGenerator[str, None]:
     """Yields NDJSON: progress events, then one result event."""
     try:
-        yield _yield_line({"event": "progress", "phase": "fetch", "message": "Lade Dokumente von Paperless…", "current": 0, "total": None})
+        yield _yield_line({"event": "progress", "phase": "fetch", "message": "Loading documents from Paperless…", "current": 0, "total": None})
         log.info("Duplicates: fetching documents...")
         docs = await fetch_all_documents()
-        yield _yield_line({"event": "progress", "phase": "fetch", "message": f"{len(docs)} Dokumente geladen", "current": len(docs), "total": len(docs)})
+        yield _yield_line({"event": "progress", "phase": "fetch", "message": f"{len(docs)} documents loaded", "current": len(docs), "total": len(docs)})
 
-        yield _yield_line({"event": "progress", "phase": "fetch", "message": "Lade Korrespondenten und Tags…", "current": 0, "total": None})
+        yield _yield_line({"event": "progress", "phase": "fetch", "message": "Loading correspondents and tags…", "current": 0, "total": None})
         correspondents_map, tags_map = await fetch_correspondents_and_tags()
 
-        yield _yield_line({"event": "progress", "phase": "checksum", "message": "Suche Duplikate nach Checksum…", "current": 0, "total": None})
+        yield _yield_line({"event": "progress", "phase": "checksum", "message": "Finding duplicates by checksum…", "current": 0, "total": None})
         by_checksum: Dict[str, List[Dict[str, Any]]] = {}
         for d in docs:
             checksum = d.get("checksum") or ""
@@ -242,9 +248,9 @@ async def stream_duplicates() -> AsyncGenerator[str, None]:
                         "reason": "same_checksum",
                     })
         log.info("Checksum duplicates: %s pairs", len(duplicate_pairs))
-        yield _yield_line({"event": "progress", "phase": "checksum", "message": f"{len(duplicate_pairs)} 100%%-Duplikate (Checksum)", "current": len(duplicate_pairs), "total": None})
+        yield _yield_line({"event": "progress", "phase": "checksum", "message": f"{len(duplicate_pairs)} 100% duplicates (checksum)", "current": len(duplicate_pairs), "total": None})
 
-        yield _yield_line({"event": "progress", "phase": "title", "message": "Gruppiere nach Titel…", "current": 0, "total": None})
+        yield _yield_line({"event": "progress", "phase": "title", "message": "Grouping by title…", "current": 0, "total": None})
         by_title: Dict[str, List[Dict[str, Any]]] = {}
         for d in docs:
             title = (d.get("title") or d.get("original_filename") or "").strip().lower()
@@ -254,7 +260,7 @@ async def stream_duplicates() -> AsyncGenerator[str, None]:
 
         title_groups = [(t, g) for t, g in by_title.items() if len(g) >= 2]
         total_compare = sum(len(g) * (len(g) - 1) // 2 for _, g in title_groups)
-        yield _yield_line({"event": "progress", "phase": "compare", "message": f"Vergleiche Inhalt von {total_compare} Kandidaten-Paaren…", "current": 0, "total": total_compare})
+        yield _yield_line({"event": "progress", "phase": "compare", "message": f"Comparing content of {total_compare} candidate pairs…", "current": 0, "total": total_compare})
 
         done = 0
         for title, group in title_groups:
@@ -268,7 +274,7 @@ async def stream_duplicates() -> AsyncGenerator[str, None]:
                     sim = compute_similarity(a.get("content", ""), b.get("content", ""))
                     done += 1
                     if done % 50 == 0 or done == total_compare:
-                        yield _yield_line({"event": "progress", "phase": "compare", "message": f"Verglichen: {done}/{total_compare}", "current": done, "total": total_compare})
+                        yield _yield_line({"event": "progress", "phase": "compare", "message": f"Compared: {done}/{total_compare}", "current": done, "total": total_compare})
                     if sim < 80.0:
                         continue
                     duplicate_pairs.append({
@@ -307,20 +313,20 @@ def _set_progress(message: str, current: int, total: int | None) -> None:
 
 
 async def _run_duplicate_job() -> None:
-    """Läuft im Hintergrund; schreibt Fortschritt in duplicate_job_state."""
+    """Runs in background; writes progress to duplicate_job_state."""
     duplicate_job_state["status"] = "running"
     duplicate_job_state["result"] = None
     duplicate_job_state["error"] = None
     try:
-        _set_progress("Lade Dokumente von Paperless…", 0, None)
+        _set_progress("Loading documents from Paperless…", 0, None)
         log.info("Duplicates (job): fetching documents...")
         docs = await fetch_all_documents()
-        _set_progress(f"{len(docs)} Dokumente geladen", len(docs), len(docs))
+        _set_progress(f"{len(docs)} documents loaded", len(docs), len(docs))
 
-        _set_progress("Lade Korrespondenten und Tags…", 0, None)
+        _set_progress("Loading correspondents and tags…", 0, None)
         correspondents_map, tags_map = await fetch_correspondents_and_tags()
 
-        _set_progress("Suche Duplikate nach Checksum…", 0, None)
+        _set_progress("Finding duplicates by checksum…", 0, None)
         by_checksum: Dict[str, List[Dict[str, Any]]] = {}
         for d in docs:
             c = d.get("checksum") or ""
@@ -340,9 +346,9 @@ async def _run_duplicate_job() -> None:
                         "similarity": 100.0,
                         "reason": "same_checksum",
                     })
-        _set_progress(f"{len(duplicate_pairs)} 100%-Duplikate (Checksum)", len(duplicate_pairs), None)
+        _set_progress(f"{len(duplicate_pairs)} 100% duplicates (checksum)", len(duplicate_pairs), None)
 
-        _set_progress("Gruppiere nach Titel…", 0, None)
+        _set_progress("Grouping by title…", 0, None)
         by_title: Dict[str, List[Dict[str, Any]]] = {}
         for d in docs:
             title = (d.get("title") or d.get("original_filename") or "").strip().lower()
@@ -350,7 +356,7 @@ async def _run_duplicate_job() -> None:
                 by_title.setdefault(title, []).append(d)
         title_groups = [(t, g) for t, g in by_title.items() if len(g) >= 2]
         total_compare = sum(len(g) * (len(g) - 1) // 2 for _, g in title_groups)
-        _set_progress(f"Vergleiche Inhalt von {total_compare} Kandidaten-Paaren…", 0, total_compare)
+        _set_progress(f"Comparing content of {total_compare} candidate pairs…", 0, total_compare)
 
         done = 0
         for title, group in title_groups:
@@ -364,7 +370,7 @@ async def _run_duplicate_job() -> None:
                     sim = compute_similarity(a.get("content", ""), b.get("content", ""))
                     done += 1
                     if done % 50 == 0 or done == total_compare:
-                        _set_progress(f"Verglichen: {done}/{total_compare}", done, total_compare)
+                        _set_progress(f"Compared: {done}/{total_compare}", done, total_compare)
                     if sim >= 80.0:
                         duplicate_pairs.append({
                             "a": _enrich_doc_for_pair(a, correspondents_map, tags_map),
@@ -381,7 +387,7 @@ async def _run_duplicate_job() -> None:
         result = {"pairs": duplicate_pairs, "similarity_counts": similarity_counts, "total_pairs": len(duplicate_pairs)}
         duplicate_job_state["result"] = result
         duplicate_job_state["status"] = "done"
-        _set_progress("Fertig.", 1, 1)
+        _set_progress("Done.", 1, 1)
         log.info("Duplicate job done: %s pairs", len(duplicate_pairs))
     except Exception as e:
         log.exception("Duplicate job error")
@@ -392,9 +398,9 @@ async def _run_duplicate_job() -> None:
 
 @app.post("/api/duplicates/start")
 async def start_duplicate_job():
-    """Startet die Duplikat-Suche im Hintergrund (für Polling-Fallback)."""
+    """Start duplicate search in the background (for polling fallback)."""
     if duplicate_job_state["status"] == "running":
-        raise HTTPException(status_code=409, detail="Job läuft bereits.")
+        raise HTTPException(status_code=409, detail="Job already running.")
     duplicate_job_state["status"] = "idle"
     duplicate_job_state["result"] = None
     duplicate_job_state["error"] = None
@@ -404,7 +410,7 @@ async def start_duplicate_job():
 
 @app.get("/api/duplicates/status")
 async def duplicate_job_status():
-    """Fortschritt und Ergebnis der Duplikat-Suche (für Polling)."""
+    """Progress and result of the duplicate search (for polling)."""
     return duplicate_job_state
 
 
@@ -419,10 +425,10 @@ async def _run_bulk_delete_perfect_duplicates() -> None:
     deleted_ids: list[int] = []
     groups_processed = 0
 
-    # Index für schnellen Zugriff
+    # Index for fast lookup
     docs_by_id: Dict[int, Dict[str, Any]] = {d["id"]: d for d in docs if "id" in d}
 
-    # 1) 100%-Paare (similar_title_and_content) finden
+    # 1) Find 100% pairs (similar title and content)
     by_title: Dict[str, List[Dict[str, Any]]] = {}
     for d in docs:
         title = (d.get("title") or d.get("original_filename") or "").strip().lower()
@@ -430,7 +436,7 @@ async def _run_bulk_delete_perfect_duplicates() -> None:
             continue
         by_title.setdefault(title, []).append(d)
 
-    # Graph der 100%-Duplikate aufbauen
+    # Build graph of 100% duplicates
     adjacency: Dict[int, set[int]] = {}
 
     for title, group in by_title.items():
@@ -441,7 +447,7 @@ async def _run_bulk_delete_perfect_duplicates() -> None:
             for j in range(i + 1, n):
                 a = group[i]
                 b = group[j]
-                # Inhalte vergleichen
+                # Compare content
                 sim = compute_similarity(a.get("content", ""), b.get("content", ""))
                 if int(round(sim)) != 100:
                     continue
@@ -451,7 +457,7 @@ async def _run_bulk_delete_perfect_duplicates() -> None:
                 adjacency.setdefault(ida, set()).add(idb)
                 adjacency.setdefault(idb, set()).add(ida)
 
-    # 2) Verbundkomponenten im Graphen finden
+    # 2) Find connected components in the graph
     visited: set[int] = set()
     components: List[List[int]] = []
 
@@ -483,7 +489,7 @@ async def _run_bulk_delete_perfect_duplicates() -> None:
             groups_processed += 1
             bulk_delete_state["current_group"] = idx
 
-            # Innerhalb der Komponente ein Dokument behalten, Rest löschen
+            # Keep one document per component, delete the rest
             sorted_ids = sorted(
                 comp,
                 key=lambda doc_id: (
@@ -502,7 +508,7 @@ async def _run_bulk_delete_perfect_duplicates() -> None:
                 else:
                     raise HTTPException(
                         status_code=resp.status_code,
-                        detail=f"Fehler beim Löschen von Dokument {doc_id}: {resp.text}",
+                        detail=f"Error deleting document {doc_id}: {resp.text}",
                     )
 
     bulk_delete_state["running"] = False
@@ -516,11 +522,9 @@ async def _run_bulk_delete_perfect_duplicates() -> None:
 
 @app.post("/api/delete-perfect-duplicates")
 async def delete_perfect_duplicates():
-    """
-    Startet den asynchronen Bereinigungslauf im Hintergrund.
-    """
+    """Start the async cleanup job in the background."""
     if bulk_delete_state.get("running"):
-        raise HTTPException(status_code=409, detail="Bereinigung läuft bereits.")
+        raise HTTPException(status_code=409, detail="Cleanup already running.")
 
     asyncio.create_task(_run_bulk_delete_perfect_duplicates())
     return {"status": "started"}
@@ -528,9 +532,7 @@ async def delete_perfect_duplicates():
 
 @app.get("/api/delete-perfect-duplicates/status")
 async def delete_perfect_duplicates_status():
-    """
-    Liefert den aktuellen Fortschritt des Bereinigungslaufs.
-    """
+    """Return current progress of the cleanup job."""
     return bulk_delete_state
 
 
@@ -566,13 +568,13 @@ async def delete_document(body: Dict[str, Any]):
     if not keep_id or not remove_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="keep_id und remove_id sind Pflicht",
+            detail="keep_id and remove_id are required",
         )
 
     if keep_id == remove_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="keep_id und remove_id müssen verschieden sein",
+            detail="keep_id and remove_id must be different",
         )
 
     async with httpx.AsyncClient(
@@ -583,19 +585,19 @@ async def delete_document(body: Dict[str, Any]):
     ) as client:
         resp = await client.delete(f"/api/documents/{remove_id}/")
         if resp.status_code not in (204, 200):
-            raise HTTPException(status_code=resp.status_code, detail=f"Fehler beim Löschen: {resp.text}")
+            raise HTTPException(status_code=resp.status_code, detail=f"Error deleting: {resp.text}")
 
     return JSONResponse({"status": "ok", "deleted_id": remove_id})
 
 
 @app.post("/api/delete-one")
 async def delete_one_document(body: Dict[str, Any]):
-    """Löscht ein einzelnes Dokument (für Fortschritts-Anzeige bei Mehrfachlöschung)."""
+    """Delete a single document (for progress display during bulk delete)."""
     doc_id = body.get("id")
     if not doc_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="id ist Pflicht",
+            detail="id is required",
         )
     doc_id = int(doc_id)
     async with httpx.AsyncClient(
@@ -606,22 +608,21 @@ async def delete_one_document(body: Dict[str, Any]):
     ) as client:
         resp = await client.delete(f"/api/documents/{doc_id}/")
         if resp.status_code not in (204, 200, 404):
-            raise HTTPException(status_code=resp.status_code, detail=f"Fehler beim Löschen: {resp.text}")
+            raise HTTPException(status_code=resp.status_code, detail=f"Error deleting: {resp.text}")
     return JSONResponse({"status": "ok", "deleted_id": doc_id})
 
 
 @app.post("/api/bulk-delete")
 async def bulk_delete(body: Dict[str, Any]):
     """
-    Löscht explizit ausgewählte Dokumente.
-    Erwartet JSON:
-    { "ids": [1, 2, 3, ...] }
+    Delete explicitly selected documents.
+    Expects JSON: { "ids": [1, 2, 3, ...] }
     """
     ids = body.get("ids") or []
     if not isinstance(ids, list) or not ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="ids muss eine nicht-leere Liste von IDs sein",
+            detail="ids must be a non-empty list of document IDs",
         )
 
     unique_ids = sorted(set(int(i) for i in ids))
@@ -636,12 +637,12 @@ async def bulk_delete(body: Dict[str, Any]):
         for doc_id in unique_ids:
             resp = await client.delete(f"/api/documents/{doc_id}/")
             if resp.status_code in (200, 204, 404):
-                # 404 ignorieren, falls schon weg
+                # Ignore 404 if already gone
                 deleted_ids.append(doc_id)
             else:
                 raise HTTPException(
                     status_code=resp.status_code,
-                    detail=f"Fehler beim Löschen von Dokument {doc_id}: {resp.text}",
+                    detail=f"Error deleting document {doc_id}: {resp.text}",
                 )
 
     return {"status": "ok", "deleted_ids": deleted_ids, "deleted_count": len(deleted_ids)}

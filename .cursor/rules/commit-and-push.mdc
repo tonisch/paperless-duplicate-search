@@ -1,12 +1,12 @@
 ---
-description: Nach Code-Änderungen commit + push; nach Push Server per SSH aktualisieren und prüfen
+description: After code changes commit + push; after push update server via SSH and verify
 alwaysApply: true
 ---
 
-# Auto-Commit und Server-Update
+# Auto-commit and server update
 
-- **Nach Code-Änderungen:** Alle geänderten Dateien stagen, mit aussagekräftiger Message committen (z. B. auf Deutsch) und zu `origin` pushen.
-- **Nach einem Push:**
-  1. Server aktualisieren: `ssh nancy "cd ~/paperless-duplicate-search && git pull && docker-compose down && docker-compose up -d --build"`
-  2. **Prüfung:** Auf nancy ausführen: `curl -s http://127.0.0.1:8023/api/ping` (erwartet: `{"ok":true}`). Optional: `curl -s -X POST http://127.0.0.1:8023/api/duplicates/start` und `curl -s http://127.0.0.1:8023/api/duplicates/status` – Status sollte "running" oder "done" zeigen. Ergebnis dem Nutzer kurz mitteilen (z. B. „Ping OK“, „Start/Status OK“ oder Fehler).
-- App-URL: http://10.23.42.21:8023
+- **After code changes:** Stage all changed files, commit with a clear message (e.g. in English) and push to `origin`.
+- **After a push:**
+  1. Update server: `ssh nancy "cd ~/paperless-duplicate-search && git pull && docker-compose down && docker-compose up -d --build"`
+  2. **Check:** On nancy run: `curl -s http://127.0.0.1:8023/api/ping` (expect: `{"ok":true}`). Optional: `curl -s -X POST http://127.0.0.1:8023/api/duplicates/start` and `curl -s http://127.0.0.1:8023/api/duplicates/status` – status should show "running" or "done". Report briefly to the user (e.g. “Ping OK”, “Start/Status OK” or error).
+- App URL: http://10.23.42.21:8023

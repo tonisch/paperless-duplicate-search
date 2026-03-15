@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Paperless Duplikate</title>
+  <title>Paperless Duplicates</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -45,15 +45,15 @@
   </style>
 </head>
 <body>
-  <!-- Loading Overlay: immer sichtbar während des Ladens -->
+  <!-- Loading overlay (visible until data is loaded) -->
   <div id="loadingOverlay" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/95 backdrop-blur-sm">
     <div class="w-full max-w-lg mx-4 app-card p-6">
       <div class="flex flex-col items-center gap-4">
         <div class="spinner" aria-hidden="true"></div>
-        <p id="loadingTitle" class="text-lg font-semibold text-slate-100">Lade Duplikate…</p>
+        <p id="loadingTitle" class="text-lg font-semibold text-slate-100">Loading duplicates…</p>
         <div class="w-full">
           <div class="flex items-center justify-between text-sm text-slate-400 mb-1">
-            <span id="loadingPhase">Starte Abfrage…</span>
+            <span id="loadingPhase">Starting request…</span>
             <span id="progressPercent">0%</span>
           </div>
           <div class="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
@@ -62,19 +62,19 @@
         </div>
         <details class="w-full" open>
           <summary class="cursor-pointer text-sm text-slate-500 hover:text-slate-400 select-none">Log</summary>
-          <pre id="loadLog" class="mt-2 p-3 bg-slate-900/80 border border-slate-700 rounded-lg text-xs text-slate-400 font-mono max-h-40 overflow-auto whitespace-pre-wrap">[--] Starte Abfrage…</pre>
+          <pre id="loadLog" class="mt-2 p-3 bg-slate-900/80 border border-slate-700 rounded-lg text-xs text-slate-400 font-mono max-h-40 overflow-auto whitespace-pre-wrap">[--] Starting…</pre>
         </details>
       </div>
     </div>
   </div>
 
-  <!-- Toast-Container für Meldungen (statt alert) -->
+  <!-- Toast container for notifications -->
   <div id="toastContainer" class="fixed bottom-4 left-4 right-4 md:left-auto md:right-4 md:max-w-sm flex flex-col gap-2" role="status" aria-live="polite"></div>
 
-  <!-- Fortschritt beim Löschen mehrerer Dokumente (Hintergrund) -->
+  <!-- Progress bar for bulk delete -->
   <div id="deleteProgressBar" class="fixed bottom-0 left-0 right-0 hidden bg-slate-800 border-t border-slate-600 px-4 py-2 z-40">
     <div class="max-w-2xl mx-auto flex items-center gap-3">
-      <span id="deleteProgressText" class="text-sm text-slate-300 whitespace-nowrap">Lösche…</span>
+      <span id="deleteProgressText" class="text-sm text-slate-300 whitespace-nowrap">Deleting…</span>
       <div class="flex-1 h-2 bg-slate-700 rounded-full overflow-hidden">
         <div id="deleteProgressFill" class="h-full bg-emerald-500 transition-all duration-200" style="width: 0%"></div>
       </div>
@@ -85,9 +85,9 @@
   <div id="mainContent" class="max-w-6xl mx-auto py-8 px-4">
     <header class="mb-8 flex flex-wrap items-center justify-between gap-4">
       <div>
-        <h1 id="title" class="text-3xl font-bold tracking-tight text-slate-100">Paperless Duplikate</h1>
+        <h1 id="title" class="text-3xl font-bold tracking-tight text-slate-100">Paperless Duplicates</h1>
         <p id="subtitle" class="text-slate-400 mt-1 text-sm">
-          Finde und bestätige Duplikate mit Vorschau, bevor du sie löschst.
+          Find and confirm duplicates with preview before deleting.
         </p>
       </div>
       <div class="flex items-center gap-3">
@@ -97,7 +97,7 @@
           <option value="en">English</option>
         </select>
         <button id="reloadBtn" class="btn-primary px-4 py-2 rounded-lg text-sm">
-          Neu laden
+          Reload
         </button>
       </div>
     </header>
@@ -239,7 +239,7 @@
       },
     };
 
-    let currentLang = "de";
+    let currentLang = "en";
 
     function detectLanguage() {
       const nav = navigator.language || navigator.userLanguage || "en";
@@ -301,7 +301,7 @@
     const languageSelect = document.getElementById("languageSelect");
 
     let allPairs = [];
-    /** @type {Map<string, 'deleteA'|'deleteB'>} Paar-Key -> welches Dokument löschen */
+    /** @type {Map<string, 'deleteA'|'deleteB'>} pair key -> which document to delete */
     let selectedPairs = new Map();
     let similarityChart = null;
 
@@ -327,7 +327,7 @@
       return allPairs.filter(passesFilter).length;
     }
 
-    /** Ähnlichkeits-Verteilung aus allPairs (für Diagramm/Status ohne Neuladen). */
+    /** Similarity distribution from allPairs (for chart/status without reload). */
     function getSimilarityCounts() {
       const counts = {};
       for (let pct = 80; pct <= 100; pct++) counts[pct] = 0;
@@ -338,7 +338,7 @@
       return counts;
     }
 
-    /** Chart + Filter-Zusammenfassung + Status + Kartenliste aus aktuellem allPairs aktualisieren (ohne Neuladen). */
+    /** Update chart, filter summary, status and card list from current allPairs (no reload). */
     function refreshChartAndFilter() {
       const counts = getSimilarityCounts();
       updateChart(counts, filterSelect.value || "exact_100");
@@ -1099,11 +1099,11 @@
       renderPairs();
     });
 
-    // Initial language setup und Laden starten, sobald DOM bereit ist (damit loadLog etc. existiert)
+    // Initial language setup and load data when DOM is ready
     function init() {
-      currentLang = detectLanguage();
+      const langSelect = document.getElementById("languageSelect");
+      if (langSelect) currentLang = langSelect.value === "auto" ? detectLanguage() : langSelect.value;
       try {
-        const langSelect = document.getElementById("languageSelect");
         if (langSelect) langSelect.value = "auto";
         applyTranslations();
       } catch (e) {
